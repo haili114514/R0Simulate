@@ -139,21 +139,17 @@ NTSTATUS InitDynamicOffsets(VOID) {
     UCHAR *pCode;
     USHORT offset;
 
-    // ============ 1. 获取 ExGetPreviousMode 偏移 ============
     RtlInitUnicodeString(&us, L"ExGetPreviousMode");
     pExGetPrevMode = MmGetSystemRoutineAddress(&us);
     if (!pExGetPrevMode) {
         DbgPrint("[R0S] CRITICAL ERROR: Failed to get ExGetPreviousMode address.\n");
-        return STATUS_NOT_FOUND;  // 不再回退，直接返回失败
+        return STATUS_NOT_FOUND; 
     }
 
     pCode = (UCHAR*)pExGetPrevMode;
     __try {
-        // 读取偏移量（注意：此处读取 2 字节依然存在截断风险，暂保留原逻辑）
         offset = *(USHORT*)(pCode + 0x0C);
         
-        // ===== 新增合理性校验 =====
-        // PreviousMode 通常在 KTHREAD 结构体的 0x200~0x300 附近
         if (offset < 0x100 || offset > 0x500) {
             DbgPrint("[R0S] CRITICAL ERROR: PreviousMode offset out of range: 0x%X\n", offset);
             return STATUS_INVALID_PARAMETER;
@@ -163,25 +159,22 @@ NTSTATUS InitDynamicOffsets(VOID) {
         DbgPrint("[R0S] SUCCESS: PreviousMode offset = 0x%X\n", offset);
     } 
     __except (EXCEPTION_EXECUTE_HANDLER) {
-        // 发生异常，直接返回异常代码，不再使用默认值
         DbgPrint("[R0S] CRITICAL EXCEPTION: Reading ExGetPreviousMode, Code: 0x%X\n", GetExceptionCode());
         return GetExceptionCode();
     }
 
-    // ============ 2. 获取 PsGetProcessId 偏移 ============
     RtlInitUnicodeString(&us, L"PsGetProcessId");
     pPsGetPid = MmGetSystemRoutineAddress(&us);
     if (!pPsGetPid) {
         DbgPrint("[R0S] CRITICAL ERROR: Failed to get PsGetProcessId address.\n");
-        return STATUS_NOT_FOUND;  // 不再回退，直接返回失败
+        return STATUS_NOT_FOUND;
     }
 
     pCode = (UCHAR*)pPsGetPid;
     __try {
         offset = *(USHORT*)(pCode + 0x03);
-        g_ActiveProcessLinksOffset = offset + 0x08;  // UniqueProcessId 后面跟着 ActiveProcessLinks
+        g_ActiveProcessLinksOffset = offset + 0x08;
         
-        // ActiveProcessLinks 通常在 EPROCESS 结构体的 0x400~0x500 附近
         if (g_ActiveProcessLinksOffset < 0x300 || g_ActiveProcessLinksOffset > 0x600) {
             DbgPrint("[R0S] CRITICAL ERROR: ActiveProcessLinks offset out of range: 0x%X\n", g_ActiveProcessLinksOffset);
             return STATUS_INVALID_PARAMETER;
