@@ -133,45 +133,66 @@ static NTSTATUS HandlePreviousModeSwitch(PVOID, ULONG, PVOID, ULONG, PULONG_PTR)
 static NTSTATUS HandleProcessHiding(PVOID, ULONG, PVOID, ULONG, PULONG_PTR);
 
 NTSTATUS InitDynamicOffsets(VOID) {
-    NTSTATUS status;
+    NTSTATUS status = STATUS_SUCCESS;
     UNICODE_STRING us;
     PVOID pExGetPrevMode, pPsGetPid;
     UCHAR *pCode;
     USHORT offset;
 
+    // ============ 1. 获取 ExGetPreviousMode 偏移 ============
     RtlInitUnicodeString(&us, L"ExGetPreviousMode");
     pExGetPrevMode = MmGetSystemRoutineAddress(&us);
     if (!pExGetPrevMode) {
-        DbgPrint("[R0S] Failed to get ExGetPreviousMode, using default PreviousMode offset 0x232\n");
-        g_PreviousModeOffset = 0x232;
-    } else {
-        pCode = (UCHAR*)pExGetPrevMode;
-        __try {
-            offset = *(USHORT*)(pCode + 0x0C);
-            g_PreviousModeOffset = offset;
-            DbgPrint("[R0S] ExGetPreviousMode: PreviousMode offset = 0x%X\n", offset);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-            DbgPrint("[R0S] Exception reading ExGetPreviousMode, using default 0x232\n");
-            g_PreviousModeOffset = 0x232;
-        }
+        DbgPrint("[R0S] CRITICAL ERROR: Failed to get ExGetPreviousMode address.\n");
+        return STATUS_NOT_FOUND;  // 不再回退，直接返回失败
     }
 
+    pCode = (UCHAR*)pExGetPrevMode;
+    __try {
+        // 读取偏移量（注意：此处读取 2 字节依然存在截断风险，暂保留原逻辑）
+        offset = *(USHORT*)(pCode + 0x0C);
+        
+        // ===== 新增合理性校验 =====
+        // PreviousMode 通常在 KTHREAD 结构体的 0x200~0x300 附近
+        if (offset < 0x100 || offset > 0x500) {
+            DbgPrint("[R0S] CRITICAL ERROR: PreviousMode offset out of range: 0x%X\n", offset);
+            return STATUS_INVALID_PARAMETER;
+        }
+        
+        g_PreviousModeOffset = offset;
+        DbgPrint("[R0S] SUCCESS: PreviousMode offset = 0x%X\n", offset);
+    } 
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        // 发生异常，直接返回异常代码，不再使用默认值
+        DbgPrint("[R0S] CRITICAL EXCEPTION: Reading ExGetPreviousMode, Code: 0x%X\n", GetExceptionCode());
+        return GetExceptionCode();
+    }
+
+    // ============ 2. 获取 PsGetProcessId 偏移 ============
     RtlInitUnicodeString(&us, L"PsGetProcessId");
     pPsGetPid = MmGetSystemRoutineAddress(&us);
     if (!pPsGetPid) {
-        DbgPrint("[R0S] Failed to get PsGetProcessId, using default ActiveProcessLinks 0x448\n");
-        g_ActiveProcessLinksOffset = 0x448;
-    } else {
-        pCode = (UCHAR*)pPsGetPid;
-        __try {
-            offset = *(USHORT*)(pCode + 0x03);
-            g_ActiveProcessLinksOffset = offset + 0x08;
-            DbgPrint("[R0S] PsGetProcessId: UniqueProcessId offset = 0x%X, ActiveProcessLinks = 0x%X\n",
-                     offset, g_ActiveProcessLinksOffset);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-            DbgPrint("[R0S] Exception reading PsGetProcessId, using default 0x448\n");
-            g_ActiveProcessLinksOffset = 0x448;
+        DbgPrint("[R0S] CRITICAL ERROR: Failed to get PsGetProcessId address.\n");
+        return STATUS_NOT_FOUND;  // 不再回退，直接返回失败
+    }
+
+    pCode = (UCHAR*)pPsGetPid;
+    __try {
+        offset = *(USHORT*)(pCode + 0x03);
+        g_ActiveProcessLinksOffset = offset + 0x08;  // UniqueProcessId 后面跟着 ActiveProcessLinks
+        
+        // ActiveProcessLinks 通常在 EPROCESS 结构体的 0x400~0x500 附近
+        if (g_ActiveProcessLinksOffset < 0x300 || g_ActiveProcessLinksOffset > 0x600) {
+            DbgPrint("[R0S] CRITICAL ERROR: ActiveProcessLinks offset out of range: 0x%X\n", g_ActiveProcessLinksOffset);
+            return STATUS_INVALID_PARAMETER;
         }
+        
+        DbgPrint("[R0S] SUCCESS: UniqueProcessId offset = 0x%X, ActiveProcessLinks = 0x%X\n", 
+                 offset, g_ActiveProcessLinksOffset);
+    } 
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        DbgPrint("[R0S] CRITICAL EXCEPTION: Reading PsGetProcessId, Code: 0x%X\n", GetExceptionCode());
+        return GetExceptionCode();
     }
 
     return STATUS_SUCCESS;
