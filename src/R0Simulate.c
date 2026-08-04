@@ -55,7 +55,6 @@ NTKERNELAPI NTSTATUS ZwProtectVirtualMemory(
 
 typedef struct _EXEC_INSTRUCTION_INPUT {
     ULONG   InstructionSize;
-    // ULONG   Flags;
     UCHAR   Instruction[1];
 } EXEC_INSTRUCTION_INPUT, *PEXEC_INSTRUCTION_INPUT;
 
@@ -166,7 +165,7 @@ NTSTATUS InitDynamicOffsets(VOID) {
         pCode = (UCHAR*)pPsGetPid;
         __try {
             offset = *(USHORT*)(pCode + 0x03);
-            g_ActiveProcessLinksOffset = offset + 0x08;   // UniqueProcessId + 8
+            g_ActiveProcessLinksOffset = offset + 0x08;
             DbgPrint("[R0S] PsGetProcessId: UniqueProcessId offset = 0x%X, ActiveProcessLinks = 0x%X\n",
                      offset, g_ActiveProcessLinksOffset);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -261,7 +260,7 @@ NTSTATUS ExecuteInstruction(PEPROCESS TargetProcess, PVOID InstructionCode,
     PVOID execMem = NULL;
     UINT64 result = 0;
 
-    execMem = ExAllocatePoolWithTag(NonPagedPool, InstructionSize, '0SR0');
+    execMem = ExAllocatePoolWithTag(NonPagedPoolExecute, InstructionSize, '0SR0');
     if (!execMem) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
