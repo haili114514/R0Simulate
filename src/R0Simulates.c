@@ -38,7 +38,7 @@ static BOOL InitHeap(void) {
 #define R0_HEAP g_hHeap
 
 static HANDLE g_hDriver = INVALID_HANDLE_VALUE;
-static BOOL   g_bDriverFailed = FALSE;
+// [已删除] static BOOL g_bDriverFailed = FALSE;
 
 static BOOL R0Sim_OpenDriver(void) {
     if (!InitHeap()) {
@@ -47,8 +47,7 @@ static BOOL R0Sim_OpenDriver(void) {
     }
     if (g_hDriver != INVALID_HANDLE_VALUE)
         return TRUE;
-    if (g_bDriverFailed)
-        return FALSE;
+    // [已删除] if (g_bDriverFailed) return FALSE;
 
     UNICODE_STRING uniPath;
     OBJECT_ATTRIBUTES objAttr;
@@ -77,7 +76,7 @@ static BOOL R0Sim_OpenDriver(void) {
         g_hDriver = hFile;
         return TRUE;
     }
-    g_bDriverFailed = TRUE;
+    // [已删除] g_bDriverFailed = TRUE;
     RtlSetLastWin32Error(ERROR_SERVICE_NOT_ACTIVE);
     return FALSE;
 }
@@ -87,7 +86,7 @@ static void R0Sim_CloseDriver(void) {
         NtClose(g_hDriver);
         g_hDriver = INVALID_HANDLE_VALUE;
     }
-    g_bDriverFailed = FALSE;
+    // [已删除] g_bDriverFailed = FALSE;
 }
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
