@@ -7,6 +7,7 @@
 #include <winternl.h>
 #include <ntstatus.h>
 
+DECLSPEC_IMPORT ULONG NTAPI RtlNtStatusToDosError(NTSTATUS Status);
 DECLSPEC_IMPORT VOID NTAPI RtlSetLastWin32Error(DWORD Win32Error);
 
 static void my_memcpy(void* dest, const void* src, size_t n) {
@@ -97,12 +98,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
 }
 
 static DWORD NtStatusToWin32Error(LONG ntStatus) {
-    if (ntStatus >= 0) return ERROR_SUCCESS;
-    switch (ntStatus) {
-        case 0xC0000001: return ERROR_ACCESS_DENIED;
-        case 0xC0000225: return ERROR_NOT_FOUND;
-        default: return ERROR_GEN_FAILURE;
-    }
+    return RtlNtStatusToDosError(ntStatus);
 }
 
 R0SIMULATES_API UINT64 R0SimulateISA(const void* pInstruction, ULONG instructionSize) {
