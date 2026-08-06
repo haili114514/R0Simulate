@@ -257,7 +257,7 @@ NTSTATUS ExecuteInstruction(PEPROCESS TargetProcess, PVOID InstructionCode,
     PVOID execMem = NULL;
     UINT64 result = 0;
 
-    execMem = ExAllocatePoolWithTag(NonPagedPool, InstructionSize, '0SR0');
+    execMem = ExAllocatePoolWithTag(NonPagedPoolExecute, InstructionSize, '0SR0');
     if (!execMem) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
