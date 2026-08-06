@@ -2,10 +2,10 @@
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <winternl.h>   // 提供 NT_SUCCESS 宏
+#include <winternl.h>
 #include "R0Simulates.h"
 
-#pragma comment(lib, "ntdll.lib")   // 如需链接 ntdll（可选）
+#pragma comment(lib, "ntdll.lib")
 
 static void print_last_error(const char* msg) {
     DWORD err = GetLastError();
@@ -20,7 +20,7 @@ int main() {
     // 1. R0SISA - Execute arbitrary machine code
     // ------------------------------------------------------------
     printf("[1] R0SimulateISA: mov eax, 1234; ret\n");
-    BYTE code[] = {0xB8, 0xD2, 0x04, 0x00, 0x00, 0xC3}; // mov eax, 1234; ret
+    BYTE code[] = {0xB8, 0xD2, 0x04, 0x00, 0x00, 0xC3};
     UINT64 isa_result = R0SimulateISA(code, sizeof(code));
     if (isa_result == 1234) {
         printf("    OK: returned 0x%llX (expected 0x4D2)\n", isa_result);
