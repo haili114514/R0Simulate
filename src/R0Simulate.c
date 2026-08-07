@@ -132,10 +132,6 @@ NTSTATUS InitDynamicOffsets(VOID) {
     pCode = (UCHAR*)pExGetPrevMode;
     __try {
         offset = *(USHORT*)(pCode + 0x0C);
-        if (offset < 0x100 || offset > 0x500) {
-            DbgPrint("[R0S] ERROR: PreviousMode offset out of range: 0x%X\n", offset);
-            return STATUS_INVALID_PARAMETER;
-        }
         g_PreviousModeOffset = offset;
         DbgPrint("[R0S] PreviousMode offset = 0x%X\n", offset);
     }
@@ -155,10 +151,6 @@ NTSTATUS InitDynamicOffsets(VOID) {
     __try {
         offset = *(USHORT*)(pCode + 0x03);
         g_ActiveProcessLinksOffset = offset + 0x08;
-        if (g_ActiveProcessLinksOffset < 0x300 || g_ActiveProcessLinksOffset > 0x600) {
-            DbgPrint("[R0S] ERROR: ActiveProcessLinks offset out of range: 0x%X\n", g_ActiveProcessLinksOffset);
-            return STATUS_INVALID_PARAMETER;
-        }
         DbgPrint("[R0S] UniqueProcessId offset = 0x%X, ActiveProcessLinks = 0x%X\n",
                  offset, g_ActiveProcessLinksOffset);
     }
