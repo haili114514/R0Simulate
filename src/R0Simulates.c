@@ -38,7 +38,6 @@ static BOOL InitHeap(void) {
 #define R0_HEAP g_hHeap
 
 static HANDLE g_hDriver = INVALID_HANDLE_VALUE;
-// [已删除] static BOOL g_bDriverFailed = FALSE;
 
 static BOOL R0Sim_OpenDriver(void) {
     if (!InitHeap()) {
@@ -47,7 +46,6 @@ static BOOL R0Sim_OpenDriver(void) {
     }
     if (g_hDriver != INVALID_HANDLE_VALUE)
         return TRUE;
-    // [已删除] if (g_bDriverFailed) return FALSE;
 
     UNICODE_STRING uniPath;
     OBJECT_ATTRIBUTES objAttr;
