@@ -111,7 +111,7 @@ NTSTATUS DriverCreateClose(PDEVICE_OBJECT, PIRP);
 NTSTATUS DriverDeviceControl(PDEVICE_OBJECT, PIRP);
 
 NTSTATUS ExecuteInstruction(PEPROCESS, PVOID, ULONG, PUINT64);
-static NTSTATUS CallKernelApiInternal(PEPROCESS, PVOID, ULONG, UINT64*, PVOID, ULONG, PUINT64);
+static NTSTATUS CallKernelApiInternal(PVOID, ULONG, UINT64*, PVOID, ULONG, PUINT64);
 static NTSTATUS HandlePreviousModeSwitch(PVOID, ULONG, PVOID, ULONG, PULONG_PTR);
 static NTSTATUS HandleProcessHiding(PVOID, ULONG, PVOID, ULONG, PULONG_PTR);
 
@@ -273,33 +273,29 @@ NTSTATUS ExecuteInstruction(PEPROCESS TargetProcess, PVOID InstructionCode,
     return status;
 }
 
-static NTSTATUS CallKernelApiInternal(PEPROCESS AttachProcess, PVOID ApiAddress,
-                                      ULONG Argc, UINT64 *Args,
-                                      PVOID OutputBuffer, ULONG OutputSize,
-                                      UINT64 *ReturnValue) {
+static NTSTATUS CallKernelApiInternal(
+    PVOID ApiAddress,
+    ULONG Argc,
+    UINT64 *Args,
+    PVOID OutputBuffer,
+    ULONG OutputSize,
+    UINT64 *ReturnValue)
+{
     NTSTATUS status = STATUS_SUCCESS;
     UINT64 ret = 0;
     PVOID stackMem = NULL;
     SIZE_T stackSize = 0;
-    BOOLEAN attached = FALSE;
-    KAPC_STATE apcState;
 
     UNREFERENCED_PARAMETER(OutputBuffer);
     UNREFERENCED_PARAMETER(OutputSize);
 
     if (Argc > 16) return STATUS_NOT_SUPPORTED;
 
-    if (AttachProcess != NULL) {
-        KeStackAttachProcess((PRKPROCESS)AttachProcess, &apcState);
-        attached = TRUE;
-    }
-
     if (Argc > 4) {
         stackSize = (Argc - 4) * sizeof(UINT64);
         stackMem = ExAllocatePoolWithTag(NonPagedPool, stackSize, '0SR0');
         if (!stackMem) {
-            status = STATUS_INSUFFICIENT_RESOURCES;
-            goto cleanup;
+            return STATUS_INSUFFICIENT_RESOURCES;
         }
         RtlCopyMemory(stackMem, &Args[4], stackSize);
     }
@@ -331,9 +327,7 @@ static NTSTATUS CallKernelApiInternal(PEPROCESS AttachProcess, PVOID ApiAddress,
 
     if (ReturnValue) *ReturnValue = ret;
 
-cleanup:
     if (stackMem) ExFreePoolWithTag(stackMem, '0SR0');
-    if (attached) KeUnstackDetachProcess(&apcState);
     return status;
 }
 
@@ -601,7 +595,7 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
                 }
 
                 UINT64 returnValue = 0;
-                status = CallKernelApiInternal(NULL, apiAddress,
+                status = CallKernelApiInternal(apiAddress,
                                                apiInput->ArgumentCount, apiInput->Arguments,
                                                outputBuffer, outputSize, &returnValue);
 
