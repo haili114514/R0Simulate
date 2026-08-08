@@ -590,10 +590,6 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
                     UINT64 addr = 0;
                     RtlCopyMemory(&addr, apiInput->ApiName, sizeof(addr));
                     apiAddress = (PVOID)(ULONG_PTR)addr;
-                    if ((ULONG_PTR)apiAddress < 0xFFFF800000000000ULL) {
-                        status = STATUS_INVALID_PARAMETER;
-                        break;
-                    }
                 } else {
                     UNICODE_STRING apiName;
                     RtlInitUnicodeString(&apiName, apiInput->ApiName);
