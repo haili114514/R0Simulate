@@ -1,6 +1,10 @@
+#define _CRT_SECURE_NO_WARNINGS
 #include <ntifs.h>
+#include <ntddk.h>
+#include <ntstatus.h>
+#include <ntimage.h>
 
-#pragma warning(disable:4100 4189)
+#pragma warning(disable:4100 4189 4211)
 
 #define PROCESS_QUERY_INFORMATION 0x0400
 
@@ -50,6 +54,14 @@ NTKERNELAPI NTSTATUS ZwSetInformationProcess(
     ULONG ProcessInformationLength
 );
 
+NTSYSCALLAPI NTSTATUS NTAPI ZwQuerySystemInformation(
+    ULONG SystemInformationClass,
+    PVOID SystemInformation,
+    ULONG SystemInformationLength,
+    PULONG ReturnLength
+);
+
+// ------------------ Device & IOCTL Definitions ------------------
 #define DEVICE_NAME     L"\\Device\\R0Simulate"
 #define SYM_LINK_NAME   L"\\DosDevices\\R0Simulate"
 
@@ -60,6 +72,9 @@ NTKERNELAPI NTSTATUS ZwSetInformationProcess(
 #define IOCTL_R0SIMULATE_KERNEL_OPEN_HANDLE         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_KERNEL_MEMORY_ACCESS       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_GET_SYSTEM_TOKEN           CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_SET_INTERNAL_VARS          CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_IO                         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x809, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #define R0SIMULATE_FLAG_USE_ADDRESS  0x00000001
 
@@ -74,6 +89,42 @@ NTKERNELAPI NTSTATUS ZwSetInformationProcess(
 #define R0SKMA_OP_WRITE    1
 
 #define ProcessAccessToken 9
+
+#define R0SIMULATE_VAR_OP_GET   0x01
+#define R0SIMULATE_VAR_OP_SET   0x02
+#define R0SIMULATE_VAR_OP_LIST  0x03
+
+#define R0SIMULATE_VAR_PREVIOUS_MODE_OFFSET         1
+#define R0SIMULATE_VAR_ACTIVE_PROCESS_LINKS_OFFSET  2
+#define R0SIMULATE_VAR_PRIMARY_TOKEN_FROZEN_OFFSET  3
+#define R0SIMULATE_VAR_USE_PARSED_MODE              4
+
+// ----- I/O Port Operation Codes -----
+#define R0SIO_READ_BYTE     0x01
+#define R0SIO_READ_WORD     0x02
+#define R0SIO_READ_DWORD    0x03
+#define R0SIO_WRITE_BYTE    0x11
+#define R0SIO_WRITE_WORD    0x12
+#define R0SIO_WRITE_DWORD   0x13
+
+// ------------------ Structure Definitions ------------------
+typedef struct _SYSTEM_MODULE_ENTRY {
+    HANDLE Section;
+    PVOID MappedBase;
+    PVOID ImageBase;
+    ULONG ImageSize;
+    ULONG Flags;
+    USHORT LoadOrderIndex;
+    USHORT InitOrderIndex;
+    USHORT LoadCount;
+    USHORT OffsetToFileName;
+    UCHAR FullPathName[256];
+} SYSTEM_MODULE_ENTRY, *PSYSTEM_MODULE_ENTRY;
+
+typedef struct _SYSTEM_MODULE_INFORMATION {
+    ULONG Count;
+    SYSTEM_MODULE_ENTRY Module[1];
+} SYSTEM_MODULE_INFORMATION, *PSYSTEM_MODULE_INFORMATION;
 
 typedef struct _EXEC_INSTRUCTION_INPUT {
     ULONG   InstructionSize;
@@ -142,6 +193,47 @@ typedef struct _GET_SYSTEM_TOKEN_OUTPUT {
     HANDLE   TokenHandle;
 } GET_SYSTEM_TOKEN_OUTPUT, *PGET_SYSTEM_TOKEN_OUTPUT;
 
+typedef struct _SET_INTERNAL_VAR_INPUT {
+    ULONG   Operation;
+    ULONG   VariableId;
+    UINT64  Value;
+} SET_INTERNAL_VAR_INPUT, *PSET_INTERNAL_VAR_INPUT;
+
+typedef struct _VAR_INFO {
+    ULONG   Id;
+    ULONG   Size;
+    UINT64  Value;
+    WCHAR   Name[64];
+} VAR_INFO, *PVAR_INFO;
+
+typedef struct _GET_KERNEL_FUNCTION_INPUT {
+    ULONG   NameLength;
+    WCHAR   Name[1];
+} GET_KERNEL_FUNCTION_INPUT, *PGET_KERNEL_FUNCTION_INPUT;
+
+typedef struct _KERNEL_FUNCTION_ENTRY {
+    UINT64  Address;
+    WCHAR   Name[64];
+} KERNEL_FUNCTION_ENTRY, *PKERNEL_FUNCTION_ENTRY;
+
+typedef struct _R0S_IO_INPUT {
+    ULONG   Operation;
+    ULONG   Port;
+    ULONG   Value;
+} R0S_IO_INPUT, *PR0S_IO_INPUT;
+
+typedef struct _R0S_IO_OUTPUT {
+    ULONG   Value;
+    NTSTATUS Status;
+} R0S_IO_OUTPUT, *PR0S_IO_OUTPUT;
+
+typedef struct _FUNCTION_ENTRY {
+    LIST_ENTRY ListEntry;
+    UNICODE_STRING Name;
+    PVOID Address;
+} FUNCTION_ENTRY, *PFUNCTION_ENTRY;
+
+// ------------------ Global Variables ------------------
 PDEVICE_OBJECT g_DeviceObject = NULL;
 UNICODE_STRING g_SymLinkName;
 
@@ -151,7 +243,28 @@ static KSPIN_LOCK g_HiddenListLock;
 static ULONG g_PreviousModeOffset = 0;
 static ULONG g_ActiveProcessLinksOffset = 0;
 static ULONG g_PrimaryTokenFrozenOffset = 0;
+static ULONG g_UseParsedMode = 0;
 
+static LIST_ENTRY g_FunctionTableHead;
+static KSPIN_LOCK g_FunctionTableLock;
+static BOOLEAN g_FunctionTableBuilt = FALSE;
+
+typedef struct _VAR_DESC {
+    ULONG  Id;
+    ULONG  Size;
+    PVOID  Address;
+    WCHAR  Name[64];
+} VAR_DESC;
+
+static VAR_DESC g_VarDesc[] = {
+    { 1, sizeof(ULONG), &g_PreviousModeOffset,         L"g_PreviousModeOffset" },
+    { 2, sizeof(ULONG), &g_ActiveProcessLinksOffset,   L"g_ActiveProcessLinksOffset" },
+    { 3, sizeof(ULONG), &g_PrimaryTokenFrozenOffset,   L"g_PrimaryTokenFrozenOffset" },
+    { 4, sizeof(ULONG), &g_UseParsedMode,              L"g_UseParsedMode" },
+    { 0, 0, NULL, L"" }
+};
+
+// ------------------ Function Prototypes ------------------
 NTSTATUS DriverEntry(PDRIVER_OBJECT, PUNICODE_STRING);
 VOID DriverUnload(PDRIVER_OBJECT);
 NTSTATUS DriverCreateClose(PDEVICE_OBJECT, PIRP);
@@ -164,6 +277,22 @@ NTSTATUS PreviousModeSwitch(PVOID, ULONG, PVOID, ULONG, PULONG_PTR);
 NTSTATUS ProcessHiding(PVOID, ULONG, PVOID, ULONG, PULONG_PTR);
 NTSTATUS KernelMemoryAccess(PVOID, ULONG, PVOID, ULONG, PULONG_PTR);
 NTSTATUS GetSystemToken(PVOID, ULONG, PVOID, ULONG, PULONG_PTR);
+NTSTATUS SetInternalVariables(PVOID, ULONG, PVOID, ULONG, PULONG_PTR);
+NTSTATUS LazyBuildFunctionTable(VOID);
+NTSTATUS GetKernelFunction(PVOID, ULONG, PVOID, ULONG, PULONG_PTR);
+NTSTATUS IoPortOperation(PVOID, ULONG, PVOID, ULONG, PULONG_PTR);
+
+BOOLEAN SafeReadMemory(PVOID Address, PVOID Buffer, SIZE_T Size);
+
+// ------------------ Implementation ------------------
+BOOLEAN SafeReadMemory(PVOID Address, PVOID Buffer, SIZE_T Size) {
+    __try {
+        RtlCopyMemory(Buffer, Address, Size);
+        return TRUE;
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        return FALSE;
+    }
+}
 
 NTSTATUS InitDynamicOffsets(VOID) {
     NTSTATUS status = STATUS_SUCCESS;
@@ -175,21 +304,37 @@ NTSTATUS InitDynamicOffsets(VOID) {
 
     RtlInitUnicodeString(&us, L"ExGetPreviousMode");
     pExGetPrevMode = MmGetSystemRoutineAddress(&us);
-    if (!pExGetPrevMode) return STATUS_NOT_FOUND;
+    if (!pExGetPrevMode) {
+        DbgPrint("[R0S] Failed to get ExGetPreviousMode address\n");
+        return STATUS_NOT_FOUND;
+    }
     pCode = (UCHAR*)pExGetPrevMode;
     __try {
         offset = *(USHORT*)(pCode + 0x0C);
         g_PreviousModeOffset = offset;
-    } __except(EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
+        DbgPrint("[R0S] g_PreviousModeOffset = 0x%X\n", g_PreviousModeOffset);
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        status = GetExceptionCode();
+        DbgPrint("[R0S] Exception getting g_PreviousModeOffset: 0x%08X\n", status);
+        return status;
+    }
 
     RtlInitUnicodeString(&us, L"PsGetProcessId");
     pPsGetPid = MmGetSystemRoutineAddress(&us);
-    if (!pPsGetPid) return STATUS_NOT_FOUND;
+    if (!pPsGetPid) {
+        DbgPrint("[R0S] Failed to get PsGetProcessId address\n");
+        return STATUS_NOT_FOUND;
+    }
     pCode = (UCHAR*)pPsGetPid;
     __try {
         offset = *(USHORT*)(pCode + 0x03);
         g_ActiveProcessLinksOffset = offset + 0x08;
-    } __except(EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
+        DbgPrint("[R0S] g_ActiveProcessLinksOffset = 0x%X\n", g_ActiveProcessLinksOffset);
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        status = GetExceptionCode();
+        DbgPrint("[R0S] Exception getting g_ActiveProcessLinksOffset: 0x%08X\n", status);
+        return status;
+    }
 
     if (pSystem) {
         ULONG searchLen = 0x600;
@@ -202,14 +347,130 @@ NTSTATUS InitDynamicOffsets(VOID) {
                 }
             }
         } __except(EXCEPTION_EXECUTE_HANDLER) {
-            return GetExceptionCode();
+            status = GetExceptionCode();
+            DbgPrint("[R0S] Exception getting g_PrimaryTokenFrozenOffset: 0x%08X\n", status);
+            return status;
         }
     }
 
     if (g_PrimaryTokenFrozenOffset == 0) {
+        DbgPrint("[R0S] g_PrimaryTokenFrozenOffset not found\n");
         return STATUS_NOT_FOUND;
     }
+    DbgPrint("[R0S] g_PrimaryTokenFrozenOffset = 0x%X\n", g_PrimaryTokenFrozenOffset);
 
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS LazyBuildFunctionTable(VOID) {
+    NTSTATUS status;
+    ULONG bufferSize = 0;
+    PSYSTEM_MODULE_INFORMATION pModuleInfo = NULL;
+    PVOID buffer = NULL;
+    ULONG totalExports = 0;
+
+    DbgPrint("[R0S] Lazy building function table...\n");
+
+    status = ZwQuerySystemInformation(11, NULL, 0, &bufferSize);
+    if (status != STATUS_INFO_LENGTH_MISMATCH) {
+        DbgPrint("[R0S] ZwQuerySystemInformation size failed: 0x%08X\n", status);
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    buffer = ExAllocatePoolWithTag(NonPagedPool, bufferSize, 'TBL0');
+    if (!buffer) {
+        DbgPrint("[R0S] Failed to allocate module buffer\n");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    status = ZwQuerySystemInformation(11, buffer, bufferSize, NULL);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[R0S] ZwQuerySystemInformation failed: 0x%08X\n", status);
+        ExFreePoolWithTag(buffer, 'TBL0');
+        return status;
+    }
+
+    pModuleInfo = (PSYSTEM_MODULE_INFORMATION)buffer;
+    ULONG count = pModuleInfo->Count;
+    DbgPrint("[R0S] Found %lu kernel modules\n", count);
+
+    for (ULONG i = 0; i < count; i++) {
+        PSYSTEM_MODULE_ENTRY pEntry = &pModuleInfo->Module[i];
+        PVOID base = pEntry->ImageBase;
+        ULONG size = pEntry->ImageSize;
+        if (!base || size == 0) continue;
+
+        IMAGE_DOS_HEADER dos;
+        if (!SafeReadMemory(base, &dos, sizeof(dos))) continue;
+        if (dos.e_magic != IMAGE_DOS_SIGNATURE) continue;
+
+        ULONG e_lfanew = dos.e_lfanew;
+        if (e_lfanew + sizeof(IMAGE_NT_HEADERS64) > size) continue;
+
+        IMAGE_NT_HEADERS64 nt;
+        if (!SafeReadMemory((PUCHAR)base + e_lfanew, &nt, sizeof(nt))) continue;
+        if (nt.Signature != IMAGE_NT_SIGNATURE) continue;
+
+        IMAGE_DATA_DIRECTORY exportDir = nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+        if (exportDir.VirtualAddress == 0 || exportDir.Size == 0) continue;
+        if (exportDir.VirtualAddress + exportDir.Size > size) continue;
+
+        IMAGE_EXPORT_DIRECTORY export;
+        if (!SafeReadMemory((PUCHAR)base + exportDir.VirtualAddress, &export, sizeof(export))) continue;
+        if (export.NumberOfNames == 0) continue;
+
+        if (export.AddressOfNames + export.NumberOfNames * 4 > size ||
+            export.AddressOfFunctions + export.NumberOfFunctions * 4 > size ||
+            export.AddressOfNameOrdinals + export.NumberOfNames * 2 > size) {
+            continue;
+        }
+
+        for (ULONG j = 0; j < export.NumberOfNames; j++) {
+            ULONG nameRVA;
+            if (!SafeReadMemory((PUCHAR)base + export.AddressOfNames + j * 4, &nameRVA, sizeof(nameRVA))) break;
+            if (nameRVA >= size) continue;
+
+            char funcName[128] = {0};
+            for (int k = 0; k < 127; k++) {
+                char ch;
+                if (!SafeReadMemory((PUCHAR)base + nameRVA + k, &ch, 1)) break;
+                if (ch == 0) {
+                    funcName[k] = 0;
+                    break;
+                }
+                funcName[k] = ch;
+            }
+            funcName[127] = 0;
+
+            USHORT ordinal;
+            if (!SafeReadMemory((PUCHAR)base + export.AddressOfNameOrdinals + j * 2, &ordinal, sizeof(ordinal))) break;
+            ULONG funcRVA;
+            if (!SafeReadMemory((PUCHAR)base + export.AddressOfFunctions + ordinal * 4, &funcRVA, sizeof(funcRVA))) break;
+
+            PVOID funcAddr = (PUCHAR)base + funcRVA;
+
+            PFUNCTION_ENTRY pNode = (PFUNCTION_ENTRY)ExAllocatePoolWithTag(NonPagedPool, sizeof(FUNCTION_ENTRY), 'FENT');
+            if (!pNode) continue;
+
+            ULONG len = (ULONG)strlen(funcName);
+            WCHAR* wname = (WCHAR*)ExAllocatePoolWithTag(NonPagedPool, (len + 1) * sizeof(WCHAR), 'FNAM');
+            if (!wname) {
+                ExFreePoolWithTag(pNode, 'FENT');
+                continue;
+            }
+            for (ULONG k = 0; k < len; k++) {
+                wname[k] = (WCHAR)funcName[k];
+            }
+            wname[len] = L'\0';
+            RtlInitUnicodeString(&pNode->Name, wname);
+            pNode->Address = funcAddr;
+            InsertHeadList(&g_FunctionTableHead, &pNode->ListEntry);
+            totalExports++;
+        }
+    }
+
+    DbgPrint("[R0S] Function table built, total exports: %lu\n", totalExports);
+    ExFreePoolWithTag(buffer, 'TBL0');
     return STATUS_SUCCESS;
 }
 
@@ -217,7 +478,10 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) 
     NTSTATUS status;
 
     status = InitDynamicOffsets();
-    if (!NT_SUCCESS(status)) return status;
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[R0S] InitDynamicOffsets failed: 0x%08X\n", status);
+        return status;
+    }
 
     PDEVICE_OBJECT deviceObject;
     UNICODE_STRING devName;
@@ -227,13 +491,17 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) 
 
     status = IoCreateDevice(DriverObject, 0, &devName, FILE_DEVICE_UNKNOWN,
                             0, FALSE, &deviceObject);
-    if (!NT_SUCCESS(status)) return status;
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[R0S] IoCreateDevice failed: 0x%08X\n", status);
+        return status;
+    }
 
     g_DeviceObject = deviceObject;
     deviceObject->Flags |= DO_BUFFERED_IO;
 
     status = IoCreateSymbolicLink(&g_SymLinkName, &devName);
     if (!NT_SUCCESS(status)) {
+        DbgPrint("[R0S] IoCreateSymbolicLink failed: 0x%08X\n", status);
         IoDeleteDevice(deviceObject);
         return status;
     }
@@ -246,13 +514,20 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) 
     InitializeListHead(&g_HiddenListHead);
     KeInitializeSpinLock(&g_HiddenListLock);
 
+    InitializeListHead(&g_FunctionTableHead);
+    KeInitializeSpinLock(&g_FunctionTableLock);
+    g_FunctionTableBuilt = FALSE;
+
     deviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
+    DbgPrint("[R0S] Driver loaded successfully (lazy function table)\n");
     return STATUS_SUCCESS;
 }
 
 VOID DriverUnload(PDRIVER_OBJECT DriverObject) {
     PHIDDEN_PROCESS_ENTRY pEntry, pNext;
     KIRQL oldIrql;
+
+    DbgPrint("[R0S] Driver unloading...\n");
 
     KeAcquireSpinLock(&g_HiddenListLock, &oldIrql);
     __try {
@@ -277,10 +552,24 @@ VOID DriverUnload(PDRIVER_OBJECT DriverObject) {
         KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
     }
 
+    PFUNCTION_ENTRY pFunc, pFuncNext;
+    KeAcquireSpinLock(&g_FunctionTableLock, &oldIrql);
+    for (PLIST_ENTRY pList = g_FunctionTableHead.Flink; pList != &g_FunctionTableHead; pList = pList->Flink) {
+        pFunc = CONTAINING_RECORD(pList, FUNCTION_ENTRY, ListEntry);
+        pFuncNext = (PFUNCTION_ENTRY)pList->Flink;
+        RemoveEntryList(&pFunc->ListEntry);
+        KeReleaseSpinLock(&g_FunctionTableLock, oldIrql);
+        if (pFunc->Name.Buffer) ExFreePoolWithTag(pFunc->Name.Buffer, 'FNAM');
+        ExFreePoolWithTag(pFunc, 'FENT');
+        KeAcquireSpinLock(&g_FunctionTableLock, &oldIrql);
+    }
+    KeReleaseSpinLock(&g_FunctionTableLock, oldIrql);
+
     if (g_DeviceObject) {
         IoDeleteSymbolicLink(&g_SymLinkName);
         IoDeleteDevice(g_DeviceObject);
     }
+    DbgPrint("[R0S] Driver unloaded\n");
 }
 
 NTSTATUS DriverCreateClose(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
@@ -717,6 +1006,274 @@ cleanup:
     }
 }
 
+static NTSTATUS SetInternalVariables(
+    PVOID InputBuffer,
+    ULONG InputSize,
+    PVOID OutputBuffer,
+    ULONG OutputSize,
+    PULONG_PTR Info)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+    __try {
+        if (InputSize < sizeof(SET_INTERNAL_VAR_INPUT) || !InputBuffer)
+            return STATUS_INVALID_PARAMETER;
+
+        PSET_INTERNAL_VAR_INPUT pIn = (PSET_INTERNAL_VAR_INPUT)InputBuffer;
+        ULONG op = pIn->Operation;
+
+        VAR_DESC* pDesc = g_VarDesc;
+        while (pDesc->Id != 0) {
+            if (pDesc->Id == pIn->VariableId) break;
+            pDesc++;
+        }
+        if (pDesc->Id == 0 && op != 3) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        switch (op) {
+            case 1: {
+                if (OutputSize < sizeof(UINT64)) {
+                    return STATUS_BUFFER_TOO_SMALL;
+                }
+                UINT64 val = 0;
+                if (pDesc->Size == sizeof(ULONG)) {
+                    val = *(ULONG*)pDesc->Address;
+                } else if (pDesc->Size == sizeof(UINT64)) {
+                    val = *(UINT64*)pDesc->Address;
+                } else {
+                    RtlCopyMemory(&val, pDesc->Address, pDesc->Size);
+                }
+                *(UINT64*)OutputBuffer = val;
+                *Info = sizeof(UINT64);
+                return STATUS_SUCCESS;
+            }
+            case 2: {
+                if (pDesc->Id == R0SIMULATE_VAR_USE_PARSED_MODE) {
+                    if (pIn->Value != 0 && pIn->Value != 1) {
+                        return STATUS_INVALID_PARAMETER;
+                    }
+                }
+                if (pDesc->Size == sizeof(ULONG)) {
+                    *(ULONG*)pDesc->Address = (ULONG)pIn->Value;
+                } else if (pDesc->Size == sizeof(UINT64)) {
+                    *(UINT64*)pDesc->Address = pIn->Value;
+                } else {
+                    RtlCopyMemory(pDesc->Address, &pIn->Value, pDesc->Size);
+                }
+                *Info = 0;
+                return STATUS_SUCCESS;
+            }
+            case 3: {
+                ULONG count = 0;
+                VAR_DESC* p = g_VarDesc;
+                while (p->Id != 0) { count++; p++; }
+
+                ULONG required = sizeof(ULONG) + count * sizeof(VAR_INFO);
+                if (OutputSize < required) {
+                    return STATUS_BUFFER_TOO_SMALL;
+                }
+
+                *(ULONG*)OutputBuffer = count;
+                PVAR_INFO pOutVar = (PVAR_INFO)((PUCHAR)OutputBuffer + sizeof(ULONG));
+
+                p = g_VarDesc;
+                for (ULONG i = 0; i < count; i++, p++) {
+                    pOutVar[i].Id = p->Id;
+                    pOutVar[i].Size = p->Size;
+                    UINT64 val = 0;
+                    if (p->Size == sizeof(ULONG)) {
+                        val = *(ULONG*)p->Address;
+                    } else if (p->Size == sizeof(UINT64)) {
+                        val = *(UINT64*)p->Address;
+                    } else {
+                        RtlCopyMemory(&val, p->Address, p->Size);
+                    }
+                    pOutVar[i].Value = val;
+                    wcsncpy_s(pOutVar[i].Name, sizeof(pOutVar[i].Name) / sizeof(WCHAR), p->Name, _TRUNCATE);
+                }
+                *Info = required;
+                return STATUS_SUCCESS;
+            }
+            default:
+                return STATUS_INVALID_PARAMETER;
+        }
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        return GetExceptionCode();
+    }
+}
+
+static NTSTATUS GetKernelFunction(
+    PVOID InputBuffer,
+    ULONG InputSize,
+    PVOID OutputBuffer,
+    ULONG OutputSize,
+    PULONG_PTR Info)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+    __try {
+        if (!g_FunctionTableBuilt) {
+            KIRQL oldIrql;
+            KeAcquireSpinLock(&g_FunctionTableLock, &oldIrql);
+            if (!g_FunctionTableBuilt) {
+                status = LazyBuildFunctionTable();
+                if (NT_SUCCESS(status)) {
+                    g_FunctionTableBuilt = TRUE;
+                } else {
+                    DbgPrint("[R0S] GetKernelFunction: LazyBuild failed: 0x%08X\n", status);
+                }
+            }
+            KeReleaseSpinLock(&g_FunctionTableLock, oldIrql);
+            if (!NT_SUCCESS(status))
+                return status;
+        }
+
+        if (InputSize < sizeof(ULONG) || !InputBuffer)
+            return STATUS_INVALID_PARAMETER;
+
+        PGET_KERNEL_FUNCTION_INPUT pIn = (PGET_KERNEL_FUNCTION_INPUT)InputBuffer;
+        ULONG nameLen = pIn->NameLength;
+
+        if (nameLen > 0) {
+            if (InputSize < sizeof(GET_KERNEL_FUNCTION_INPUT) + nameLen - 1)
+                return STATUS_BUFFER_TOO_SMALL;
+            if (OutputSize < sizeof(UINT64))
+                return STATUS_BUFFER_TOO_SMALL;
+
+            UNICODE_STRING uniName;
+            RtlInitUnicodeString(&uniName, pIn->Name);
+
+            UINT64 address = 0;
+            KIRQL oldIrql;
+            KeAcquireSpinLock(&g_FunctionTableLock, &oldIrql);
+            PLIST_ENTRY pList = g_FunctionTableHead.Flink;
+            while (pList != &g_FunctionTableHead) {
+                PFUNCTION_ENTRY pNode = CONTAINING_RECORD(pList, FUNCTION_ENTRY, ListEntry);
+                if (RtlCompareUnicodeString(&pNode->Name, &uniName, TRUE) == 0) {
+                    address = (UINT64)(ULONG_PTR)pNode->Address;
+                    break;
+                }
+                pList = pList->Flink;
+            }
+            KeReleaseSpinLock(&g_FunctionTableLock, oldIrql);
+
+            if (address == 0) {
+                return STATUS_NOT_FOUND;
+            }
+
+            *(PUINT64)OutputBuffer = address;
+            *Info = sizeof(UINT64);
+            return STATUS_SUCCESS;
+        } else {
+            ULONG count = 0;
+            KIRQL oldIrql;
+            KeAcquireSpinLock(&g_FunctionTableLock, &oldIrql);
+            PLIST_ENTRY pList = g_FunctionTableHead.Flink;
+            while (pList != &g_FunctionTableHead) {
+                count++;
+                pList = pList->Flink;
+            }
+            KeReleaseSpinLock(&g_FunctionTableLock, oldIrql);
+
+            ULONG requiredSize = sizeof(ULONG) + count * sizeof(KERNEL_FUNCTION_ENTRY);
+            if (OutputSize < requiredSize) {
+                *Info = requiredSize;
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            *(PULONG)OutputBuffer = count;
+            PKERNEL_FUNCTION_ENTRY pEntry = (PKERNEL_FUNCTION_ENTRY)((PUCHAR)OutputBuffer + sizeof(ULONG));
+
+            KeAcquireSpinLock(&g_FunctionTableLock, &oldIrql);
+            pList = g_FunctionTableHead.Flink;
+            ULONG idx = 0;
+            while (pList != &g_FunctionTableHead && idx < count) {
+                PFUNCTION_ENTRY pNode = CONTAINING_RECORD(pList, FUNCTION_ENTRY, ListEntry);
+                pEntry[idx].Address = (UINT64)(ULONG_PTR)pNode->Address;
+                ULONG nameLenChars = (pNode->Name.Length / sizeof(WCHAR));
+                if (nameLenChars >= 64) nameLenChars = 63;
+                RtlCopyMemory(pEntry[idx].Name, pNode->Name.Buffer, nameLenChars * sizeof(WCHAR));
+                pEntry[idx].Name[nameLenChars] = L'\0';
+                idx++;
+                pList = pList->Flink;
+            }
+            KeReleaseSpinLock(&g_FunctionTableLock, oldIrql);
+
+            *Info = requiredSize;
+            return STATUS_SUCCESS;
+        }
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        return GetExceptionCode();
+    }
+}
+
+// ------------------ I/O Port Operation ------------------
+static NTSTATUS IoPortOperation(
+    PVOID InputBuffer,
+    ULONG InputSize,
+    PVOID OutputBuffer,
+    ULONG OutputSize,
+    PULONG_PTR Info)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+    __try {
+        if (InputSize < sizeof(R0S_IO_INPUT) || !InputBuffer)
+            return STATUS_INVALID_PARAMETER;
+        if (OutputSize < sizeof(R0S_IO_OUTPUT))
+            return STATUS_BUFFER_TOO_SMALL;
+
+        PR0S_IO_INPUT pIn = (PR0S_IO_INPUT)InputBuffer;
+        PR0S_IO_OUTPUT pOut = (PR0S_IO_OUTPUT)OutputBuffer;
+        ULONG port = pIn->Port;
+        ULONG value = 0;
+        BOOLEAN writeOp = FALSE;
+
+        switch (pIn->Operation) {
+            case R0SIO_READ_BYTE:
+                value = READ_PORT_UCHAR((PUCHAR)(ULONG_PTR)port);
+                break;
+            case R0SIO_READ_WORD:
+                value = READ_PORT_USHORT((PUSHORT)(ULONG_PTR)port);
+                break;
+            case R0SIO_READ_DWORD:
+                value = READ_PORT_ULONG((PULONG)(ULONG_PTR)port);
+                break;
+            case R0SIO_WRITE_BYTE:
+                WRITE_PORT_UCHAR((PUCHAR)(ULONG_PTR)port, (UCHAR)pIn->Value);
+                writeOp = TRUE;
+                break;
+            case R0SIO_WRITE_WORD:
+                WRITE_PORT_USHORT((PUSHORT)(ULONG_PTR)port, (USHORT)pIn->Value);
+                writeOp = TRUE;
+                break;
+            case R0SIO_WRITE_DWORD:
+                WRITE_PORT_ULONG((PULONG)(ULONG_PTR)port, pIn->Value);
+                writeOp = TRUE;
+                break;
+            default:
+                return STATUS_INVALID_PARAMETER;
+        }
+
+        pOut->Status = STATUS_SUCCESS;
+        if (!writeOp) {
+            pOut->Value = value;
+        } else {
+            pOut->Value = 0;
+        }
+        *Info = sizeof(R0S_IO_OUTPUT);
+        return STATUS_SUCCESS;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        status = GetExceptionCode();
+        if (OutputSize >= sizeof(R0S_IO_OUTPUT)) {
+            PR0S_IO_OUTPUT pOut = (PR0S_IO_OUTPUT)OutputBuffer;
+            pOut->Status = status;
+            pOut->Value = 0;
+            *Info = sizeof(R0S_IO_OUTPUT);
+        }
+        return status;
+    }
+}
+
+// ------------------ Driver Device Control ------------------
 NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
     PIO_STACK_LOCATION irpSp = IoGetCurrentIrpStackLocation(Irp);
     NTSTATUS status = STATUS_SUCCESS;
@@ -795,7 +1352,37 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
                 } else {
                     UNICODE_STRING apiName;
                     RtlInitUnicodeString(&apiName, apiInput->ApiName);
-                    apiAddress = MmGetSystemRoutineAddress(&apiName);
+                    if (g_UseParsedMode == 1) {
+                        if (!g_FunctionTableBuilt) {
+                            KIRQL oldIrql;
+                            KeAcquireSpinLock(&g_FunctionTableLock, &oldIrql);
+                            if (!g_FunctionTableBuilt) {
+                                status = LazyBuildFunctionTable();
+                                if (NT_SUCCESS(status)) {
+                                    g_FunctionTableBuilt = TRUE;
+                                } else {
+                                    DbgPrint("[R0S] LazyBuildFunctionTable failed: 0x%08X\n", status);
+                                }
+                            }
+                            KeReleaseSpinLock(&g_FunctionTableLock, oldIrql);
+                        }
+                        if (g_FunctionTableBuilt) {
+                            KIRQL oldIrql;
+                            KeAcquireSpinLock(&g_FunctionTableLock, &oldIrql);
+                            PLIST_ENTRY pList = g_FunctionTableHead.Flink;
+                            while (pList != &g_FunctionTableHead) {
+                                PFUNCTION_ENTRY pNode = CONTAINING_RECORD(pList, FUNCTION_ENTRY, ListEntry);
+                                if (RtlCompareUnicodeString(&pNode->Name, &apiName, TRUE) == 0) {
+                                    apiAddress = pNode->Address;
+                                    break;
+                                }
+                                pList = pList->Flink;
+                            }
+                            KeReleaseSpinLock(&g_FunctionTableLock, oldIrql);
+                        }
+                    } else {
+                        apiAddress = MmGetSystemRoutineAddress(&apiName);
+                    }
                     if (!apiAddress) {
                         status = STATUS_NOT_FOUND;
                         break;
@@ -877,6 +1464,21 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
 
         case IOCTL_R0SIMULATE_GET_SYSTEM_TOKEN: {
             status = GetSystemToken(inputBuffer, inputSize, outputBuffer, outputSize, &info);
+            break;
+        }
+
+        case IOCTL_R0SIMULATE_SET_INTERNAL_VARS: {
+            status = SetInternalVariables(inputBuffer, inputSize, outputBuffer, outputSize, &info);
+            break;
+        }
+
+        case IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION: {
+            status = GetKernelFunction(inputBuffer, inputSize, outputBuffer, outputSize, &info);
+            break;
+        }
+
+        case IOCTL_R0SIMULATE_IO: {
+            status = IoPortOperation(inputBuffer, inputSize, outputBuffer, outputSize, &info);
             break;
         }
 
