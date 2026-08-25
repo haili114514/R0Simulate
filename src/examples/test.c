@@ -6,9 +6,6 @@
 #include <securitybaseapi.h>
 #include "R0Simulates.h"
 
-#pragma comment(lib, "ntdll.lib")
-#pragma comment(lib, "advapi32.lib")
-
 static void print_last_error(const char* msg) {
     DWORD err = GetLastError();
     fprintf(stderr, "[!] %s failed, error code: %lu\n", msg, err);
@@ -163,6 +160,138 @@ int main() {
     } else {
         print_last_error("R0SKGT replace");
         printf("    Hint: If failed, driver may not implement replacement correctly, or insufficient privilege.\n");
+    }
+
+    // 9. R0SimulateSetInternalVariables - GET/SET/LIST
+    printf("\n[9] R0SimulateSetInternalVariables: LIST, GET, SET operations\n");
+
+    // 9.1 LIST
+    printf("\n    [9.1] LIST all internal variables\n");
+    UCHAR listBuffer[4096] = {0};
+    ULONG infoCount = 0;
+    ok = R0SimulateSetInternalVariables(
+        R0SIMULATE_VAR_OP_LIST,
+        0,
+        0,
+        listBuffer,
+        sizeof(listBuffer),
+        &infoCount
+    );
+    if (ok) {
+        printf("    OK: Retrieved %lu variables:\n", infoCount);
+        PVAR_INFO pInfo = (PVAR_INFO)(listBuffer + sizeof(ULONG));
+        for (ULONG i = 0; i < infoCount; i++) {
+            wprintf(L"        ID=%lu, Name=%s, Size=%lu, Value=0x%llX\n",
+                    pInfo[i].Id, pInfo[i].Name, pInfo[i].Size, pInfo[i].Value);
+        }
+    } else {
+        print_last_error("R0SimulateSetInternalVariables LIST");
+    }
+
+    // 9.2 GET previous mode offset
+    printf("\n    [9.2] GET g_PreviousModeOffset\n");
+    UINT64 prevOffset = 0;
+    ok = R0SimulateSetInternalVariables(
+        R0SIMULATE_VAR_OP_GET,
+        R0SIMULATE_VAR_PREVIOUS_MODE_OFFSET,
+        0,
+        &prevOffset,
+        sizeof(prevOffset),
+        NULL
+    );
+    if (ok) {
+        printf("    OK: g_PreviousModeOffset = 0x%llX\n", prevOffset);
+    } else {
+        print_last_error("R0SimulateSetInternalVariables GET");
+    }
+
+    // 9.3 SET previous mode offset to a new value (only for demo, restore later)
+    printf("\n    [9.3] SET g_PreviousModeOffset to 0x1234 (temporary)\n");
+    UINT64 newVal = 0x1234;
+    ok = R0SimulateSetInternalVariables(
+        R0SIMULATE_VAR_OP_SET,
+        R0SIMULATE_VAR_PREVIOUS_MODE_OFFSET,
+        newVal,
+        NULL,
+        0,
+        NULL
+    );
+    if (ok) {
+        printf("    OK: set to 0x1234\n");
+        // Verify
+        UINT64 checkVal = 0;
+        ok = R0SimulateSetInternalVariables(
+            R0SIMULATE_VAR_OP_GET,
+            R0SIMULATE_VAR_PREVIOUS_MODE_OFFSET,
+            0,
+            &checkVal,
+            sizeof(checkVal),
+            NULL
+        );
+        if (ok && checkVal == newVal) {
+            printf("    Verification: read back 0x%llX, matched.\n", checkVal);
+        } else {
+            printf("    Verification: read back 0x%llX, mismatch or error.\n", checkVal);
+        }
+        // Restore original value
+        printf("    Restoring original value 0x%llX\n", prevOffset);
+        R0SimulateSetInternalVariables(
+            R0SIMULATE_VAR_OP_SET,
+            R0SIMULATE_VAR_PREVIOUS_MODE_OFFSET,
+            prevOffset,
+            NULL,
+            0,
+            NULL
+        );
+        // Verify restore
+        UINT64 restoredVal = 0;
+        R0SimulateSetInternalVariables(
+            R0SIMULATE_VAR_OP_GET,
+            R0SIMULATE_VAR_PREVIOUS_MODE_OFFSET,
+            0,
+            &restoredVal,
+            sizeof(restoredVal),
+            NULL
+        );
+        printf("    Restored value: 0x%llX\n", restoredVal);
+    } else {
+        print_last_error("R0SimulateSetInternalVariables SET");
+    }
+
+    // 10. R0SimulateGetKernelFunction - query single function
+    printf("\n[10] R0SimulateGetKernelFunction - query single function\n");
+    UINT64 funcAddr = 0;
+    ok = R0SimulateGetKernelFunction(L"ExAllocatePoolWithTag", &funcAddr, sizeof(funcAddr), NULL);
+    if (ok && funcAddr != 0) {
+        printf("    OK: ExAllocatePoolWithTag @ 0x%016llX\n", funcAddr);
+    } else {
+        print_last_error("R0SimulateGetKernelFunction (single)");
+    }
+
+    // 11. R0SimulateIO - read I/O port (0x60, keyboard controller)
+    printf("\n[11] R0SimulateIO - read I/O port (0x60, keyboard controller)\n");
+    ULONG ioValue = 0;
+    ok = R0SimulateIO(R0SIO_READ_BYTE, 0x60, 0, &ioValue);
+    if (ok) {
+        printf("    OK: Port 0x60 = 0x%02X\n", ioValue);
+    } else {
+        print_last_error("R0SimulateIO read byte (0x60)");
+    }
+
+    // 12. R0SimulateIO - write I/O port (0x80, debug port)
+    printf("\n[12] R0SimulateIO - write I/O port (0x80, debug port)\n");
+    ok = R0SimulateIO(R0SIO_WRITE_BYTE, 0x80, 0xAA, NULL);
+    if (ok) {
+        printf("    OK: wrote 0xAA to port 0x80\n");
+        // Try read-back (may not be supported)
+        ok = R0SimulateIO(R0SIO_READ_BYTE, 0x80, 0, &ioValue);
+        if (ok) {
+            printf("    Read-back: 0x%02X\n", ioValue);
+        } else {
+            printf("    (Read-back not supported or failed, error code: %lu)\n", GetLastError());
+        }
+    } else {
+        print_last_error("R0SimulateIO write byte (0x80)");
     }
 
     printf("\n===== Demo finished. Press any key to exit =====\n");
