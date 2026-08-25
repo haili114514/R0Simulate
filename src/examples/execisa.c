@@ -129,11 +129,31 @@ static unsigned long long execute_user_mode(const BYTE* code, size_t size) {
 }
 
 static unsigned long long execute_driver_mode(const BYTE* code, size_t size) {
-    unsigned long long result = R0SimulateISA(code, (unsigned long)size);
-    DWORD err = GetLastError();
+    unsigned long long result = 0;
+    DWORD err;
+    UCHAR oldMode = 0, newMode = 0;
+
+    HANDLE hToken = R0SimulateGetSystemToken(TRUE);
+    if (hToken == NULL && GetLastError() != ERROR_SUCCESS) {
+        fprintf(stderr, "R0SimulateGetSystemToken (replace) failed, error: %lu\n", GetLastError());
+        return 0;
+    }
+
+    if (!R0SimulatePreviousModeSwitch(FALSE, R0SPMS_MODE_KERNEL, &oldMode, &newMode)) {
+        fprintf(stderr, "R0SimulatePreviousModeSwitch (set kernel) failed, error: %lu\n", GetLastError());
+        return 0;
+    }
+
+    result = R0SimulateISA(code, (unsigned long)size);
+    err = GetLastError();
     if (result == 0 && err != ERROR_SUCCESS) {
         fprintf(stderr, "R0SimulateISA failed, error code: %lu\n", err);
     }
+
+    if (!R0SimulatePreviousModeSwitch(FALSE, oldMode, NULL, NULL)) {
+        fprintf(stderr, "Warning: Failed to restore PreviousMode, error: %lu\n", GetLastError());
+    }
+
     return result;
 }
 
