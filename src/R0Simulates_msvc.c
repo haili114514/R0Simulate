@@ -17,25 +17,20 @@ HANDLE NTAPI RtlCreateHeap(ULONG Flags, PVOID HeapBase, SIZE_T ReserveSize,
 ULONG NTAPI RtlNtStatusToDosError(NTSTATUS Status);
 VOID NTAPI RtlSetLastWin32Error(DWORD Win32Error);
 
-static void my_memcpy(void* dest, const void* src, size_t n) {
+#pragma function(memcpy)
+#pragma function(memset)
+
+void* memcpy(void* dest, const void* src, size_t n) {
     unsigned char* d = (unsigned char*)dest;
     const unsigned char* s = (const unsigned char*)src;
-    for (size_t i = 0; i < n; i++) d[i] = s[i];
-}
-
-static void my_memset(void* dest, int val, size_t n) {
-    unsigned char* d = (unsigned char*)dest;
-    for (size_t i = 0; i < n; i++) d[i] = (unsigned char)val;
-}
-
-void *memset(void *dest, int c, size_t n) {
-    unsigned char *d = (unsigned char *)dest;
-    while (n--) *d++ = (unsigned char)c;
+    while (n--) *d++ = *s++;
     return dest;
 }
 
-static void my_zero_memory(void* dest, size_t len) {
-    my_memset(dest, 0, len);
+void* memset(void* dest, int c, size_t n) {
+    unsigned char* d = (unsigned char*)dest;
+    while (n--) *d++ = (unsigned char)c;
+    return dest;
 }
 
 static size_t my_wcslen(const WCHAR* str) {
@@ -131,7 +126,7 @@ R0SIMULATES_API UINT64 R0SimulateISA(const void* pInstruction, ULONG instruction
         return 0;
     }
     pIn->InstructionSize = instructionSize;
-    my_memcpy(pIn->Instruction, pInstruction, instructionSize);
+    memcpy(pIn->Instruction, pInstruction, instructionSize);
 
     EXEC_INSTRUCTION_OUTPUT out;
     IO_STATUS_BLOCK ioStatus;
@@ -164,10 +159,35 @@ R0SIMULATES_API UINT64 R0SimulateAPI(const WCHAR* pwszApiName, ULONG argc, ULONG
         return 0;
     }
     BOOL useAddress = (flags & R0SIMULATE_FLAG_USE_ADDRESS) ? TRUE : FALSE;
+    BOOL useSsn = (flags & R0SIMULATE_FLAG_SSN_MODE) ? TRUE : FALSE;
+    if (useAddress && useSsn) {
+        RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
     ULONG nameLen = 0;
     size_t totalInSize;
+    WCHAR ssnStr[16] = {0};
+
     if (useAddress) {
         totalInSize = sizeof(CALL_KERNEL_API_INPUT) + sizeof(UINT64);
+    } else if (useSsn) {
+        ULONG ssn = (ULONG)(ULONG_PTR)pwszApiName;
+        int idx = 0;
+        if (ssn == 0) {
+            ssnStr[idx++] = L'0';
+        } else {
+            WCHAR tmp[16];
+            int t = 0;
+            while (ssn > 0 && t < 15) {
+                tmp[t++] = L'0' + (ssn % 10);
+                ssn /= 10;
+            }
+            while (t > 0) ssnStr[idx++] = tmp[--t];
+        }
+        ssnStr[idx] = L'\0';
+        nameLen = (ULONG)((idx + 1) * sizeof(WCHAR));
+        totalInSize = sizeof(CALL_KERNEL_API_INPUT) + nameLen;
     } else {
         if (!pwszApiName) {
             RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
@@ -180,6 +200,7 @@ R0SIMULATES_API UINT64 R0SimulateAPI(const WCHAR* pwszApiName, ULONG argc, ULONG
         }
         totalInSize = sizeof(CALL_KERNEL_API_INPUT) + nameLen;
     }
+
     PCALL_KERNEL_API_INPUT pIn = (PCALL_KERNEL_API_INPUT)RtlAllocateHeap(R0_HEAP, HEAP_ZERO_MEMORY, totalInSize);
     if (!pIn) {
         RtlSetLastWin32Error(ERROR_OUTOFMEMORY);
@@ -188,18 +209,23 @@ R0SIMULATES_API UINT64 R0SimulateAPI(const WCHAR* pwszApiName, ULONG argc, ULONG
     pIn->ApiNameLength = useAddress ? 0 : nameLen;
     pIn->ArgumentCount = argc;
     pIn->Flags = flags;
+
     if (useAddress) {
         UINT64 addr = (UINT64)(ULONG_PTR)pwszApiName;
-        my_memcpy(pIn->ApiName, &addr, sizeof(addr));
+        memcpy(pIn->ApiName, &addr, sizeof(addr));
+    } else if (useSsn) {
+        memcpy(pIn->ApiName, ssnStr, nameLen);
     } else {
-        my_memcpy(pIn->ApiName, pwszApiName, nameLen);
+        memcpy(pIn->ApiName, pwszApiName, nameLen);
     }
+
     va_list args;
     va_start(args, flags);
     for (ULONG i = 0; i < argc && i < 16; i++) {
         pIn->Arguments[i] = va_arg(args, UINT64);
     }
     va_end(args);
+
     CALL_KERNEL_API_OUTPUT out;
     IO_STATUS_BLOCK ioStatus;
     NTSTATUS status = NtDeviceIoControlFile(
@@ -231,7 +257,7 @@ R0SIMULATES_API BOOL R0SimulateKernelProcessHiding(UCHAR operation, ULONG pid, P
         return FALSE;
     }
     PROCESS_HIDING_INPUT in;
-    my_zero_memory(&in, sizeof(in));
+    memset(&in, 0, sizeof(in));
     in.Operation = operation;
     ULONG inputSize = sizeof(PROCESS_HIDING_INPUT);
     if (operation == R0SKPH_OP_ADD || operation == R0SKPH_OP_REMOVE) {
@@ -242,7 +268,7 @@ R0SIMULATES_API BOOL R0SimulateKernelProcessHiding(UCHAR operation, ULONG pid, P
         RtlSetLastWin32Error(ERROR_OUTOFMEMORY);
         return FALSE;
     }
-    my_memcpy(pInBuf, &in, sizeof(PROCESS_HIDING_INPUT));
+    memcpy(pInBuf, &in, sizeof(PROCESS_HIDING_INPUT));
     if (operation == R0SKPH_OP_ADD || operation == R0SKPH_OP_REMOVE) {
         *(PULONG)(pInBuf + sizeof(PROCESS_HIDING_INPUT)) = pid;
     }
@@ -286,7 +312,7 @@ R0SIMULATES_API BOOL R0SimulatePreviousModeSwitch(BOOL viewOnly, UCHAR mode, UCH
         }
     }
     PREVIOUS_MODE_SWITCH_INPUT in;
-    my_zero_memory(&in, sizeof(in));
+    memset(&in, 0, sizeof(in));
     in.Mode = mode;
     in.ViewOnly = viewOnly ? 1 : 0;
     PREVIOUS_MODE_SWITCH_OUTPUT out;
@@ -358,7 +384,7 @@ R0SIMULATES_API BOOL R0SimulateKernelMemoryAccess(UINT64 Address, ULONG Offset, 
     pIn->Operation = Operation;
 
     if (Operation == R0SKMA_OP_WRITE) {
-        my_memcpy(pIn->Data, Buffer, Length);
+        memcpy(pIn->Data, Buffer, Length);
     }
 
     IO_STATUS_BLOCK ioStatus;
@@ -376,7 +402,7 @@ R0SIMULATES_API BOOL R0SimulateKernelMemoryAccess(UINT64 Address, ULONG Offset, 
     }
 
     if (Operation == R0SKMA_OP_READ) {
-        my_memcpy(Buffer, pIn->Data, Length);
+        memcpy(Buffer, pIn->Data, Length);
     }
 
     RtlFreeHeap(R0_HEAP, 0, pIn);
@@ -391,7 +417,7 @@ R0SIMULATES_API HANDLE R0SimulateGetSystemToken(BOOL ReplaceToken) {
     if (!R0Sim_OpenDriver()) return NULL;
 
     GET_SYSTEM_TOKEN_INPUT in;
-    my_zero_memory(&in, sizeof(in));
+    memset(&in, 0, sizeof(in));
     in.ReplaceToken = ReplaceToken ? 1 : 0;
 
     GET_SYSTEM_TOKEN_OUTPUT out;
@@ -417,7 +443,6 @@ R0SIMULATES_API HANDLE R0SimulateGetSystemToken(BOOL ReplaceToken) {
     return result;
 }
 
-// ----- R0SimulateSetInternalVariables -----
 R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
     ULONG  Operation,
     ULONG  VariableId,
@@ -442,19 +467,10 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
             RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
             return FALSE;
         }
-    } else {
-        if (VariableId != R0SIMULATE_VAR_PREVIOUS_MODE_OFFSET &&
-            VariableId != R0SIMULATE_VAR_ACTIVE_PROCESS_LINKS_OFFSET &&
-            VariableId != R0SIMULATE_VAR_PRIMARY_TOKEN_FROZEN_OFFSET &&
-            VariableId != R0SIMULATE_VAR_USE_PARSED_MODE) {
+    } else if (Operation == R0SIMULATE_VAR_OP_GET) {
+        if (!pOutBuffer || outSize < sizeof(UINT64)) {
             RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
             return FALSE;
-        }
-        if (Operation == R0SIMULATE_VAR_OP_GET) {
-            if (!pOutBuffer || outSize < sizeof(UINT64)) {
-                RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
-                return FALSE;
-            }
         }
     }
 
@@ -489,7 +505,6 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
     return result;
 }
 
-// ----- R0SimulateGetKernelFunction -----
 R0SIMULATES_API BOOL R0SimulateGetKernelFunction(
     const WCHAR* FunctionName,
     PVOID pOutBuffer,
@@ -519,7 +534,7 @@ R0SIMULATES_API BOOL R0SimulateGetKernelFunction(
 
     pIn->NameLength = nameLen;
     if (FunctionName) {
-        my_memcpy(pIn->Name, FunctionName, nameLen);
+        memcpy(pIn->Name, FunctionName, nameLen);
     }
 
     IO_STATUS_BLOCK ioStatus;
@@ -550,7 +565,6 @@ R0SIMULATES_API BOOL R0SimulateGetKernelFunction(
     return result;
 }
 
-// ----- R0SimulateIO -----
 R0SIMULATES_API BOOL R0SimulateIO(
     ULONG Operation,
     ULONG Port,
