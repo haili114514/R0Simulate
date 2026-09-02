@@ -46,7 +46,7 @@ extern "C" {
 #define R0SIMULATE_VAR_OP_SET   0x02
 #define R0SIMULATE_VAR_OP_LIST  0x03
 
-// ----- Internal Variable IDs (Sync with driver VAR_DESC 1~28) -----
+// ----- Internal Variable IDs -----
 #define R0SIMULATE_VAR_PREVIOUS_MODE_OFFSET         1
 #define R0SIMULATE_VAR_ACTIVE_PROCESS_LINKS_OFFSET  2
 #define R0SIMULATE_VAR_PRIMARY_TOKEN_FROZEN_OFFSET  3
@@ -79,6 +79,12 @@ extern "C" {
 #define VAR_ATTR_DESCRIPTOR                    27
 #define VAR_ANTI_KILL                          28
 
+// ----- DLL internal variable ID -----
+#define R0SIMULATE_VAR_DLL_ERROR_MODE          0x1000
+
+// ----- Error mode control -----
+#define R0SIMULATE_ERROR_MODE_DEFAULT  ((ULONG)-1)
+
 // ----- I/O Port Operations -----
 #define R0SIO_READ_BYTE     0x01
 #define R0SIO_READ_WORD     0x02
@@ -87,7 +93,7 @@ extern "C" {
 #define R0SIO_WRITE_WORD    0x12
 #define R0SIO_WRITE_DWORD   0x13
 
-// ----- Structures (must match driver binary layout exactly) -----
+// ----- Structures -----
 typedef struct _EXEC_INSTRUCTION_INPUT {
     ULONG   InstructionSize;
     UCHAR   Instruction[1];
@@ -189,6 +195,7 @@ typedef struct _R0S_IO_OUTPUT {
     ULONG   Status;
 } R0S_IO_OUTPUT, *PR0S_IO_OUTPUT;
 
+// ----- Exported functions -----
 R0SIMULATES_API UINT64 R0SimulateISA(const void* pInstruction, ULONG instructionSize);
 R0SIMULATES_API UINT64 R0SimulateAPI(const WCHAR* pwszApiName, ULONG argc, ULONG flags, ...);
 R0SIMULATES_API BOOL R0SimulateKernelProcessHiding(UCHAR operation, ULONG pid, PVOID pOutBuffer, ULONG outSize);
@@ -202,7 +209,8 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
     UINT64 Value,
     PVOID  pOutBuffer,
     ULONG  outSize,
-    PULONG pInfoCount
+    PULONG pInfoCount,
+    ULONG  ErrorMode
 );
 R0SIMULATES_API BOOL R0SimulateGetKernelFunction(
     const WCHAR* FunctionName,

@@ -98,6 +98,18 @@ static void R0Sim_CloseDriver(void) {
     }
 }
 
+// ---------- DLL internal error mode ----------
+static ULONG g_DllErrorMode = 0;   // 0 = convert NTSTATUS to Win32 error, 1 = pass NTSTATUS raw
+
+// Helper: set last error according to mode
+static void SetLastErrorByMode(ULONG errorMode, NTSTATUS status) {
+    if (errorMode == 1) {
+        RtlSetLastWin32Error((DWORD)status);
+    } else {
+        RtlSetLastWin32Error(RtlNtStatusToDosError(status));
+    }
+}
+
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
     (void)hinstDLL;
     (void)lpvReserved;
@@ -443,18 +455,49 @@ R0SIMULATES_API HANDLE R0SimulateGetSystemToken(BOOL ReplaceToken) {
     return result;
 }
 
+// ---------- Modified function with ErrorMode ----------
 R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
     ULONG  Operation,
     ULONG  VariableId,
     UINT64 Value,
     PVOID  pOutBuffer,
     ULONG  outSize,
-    PULONG pInfoCount)
+    PULONG pInfoCount,
+    ULONG  ErrorMode)
 {
     BOOL result = FALSE;
 
     if (!R0Sim_OpenDriver()) return FALSE;
 
+    // Determine actual mode: if ErrorMode == R0SIMULATE_ERROR_MODE_DEFAULT, use internal variable
+    ULONG actualMode;
+    if (ErrorMode == R0SIMULATE_ERROR_MODE_DEFAULT) {
+        actualMode = g_DllErrorMode;
+    } else {
+        actualMode = (ErrorMode == 0) ? 0 : 1;  // force 0 or 1
+    }
+
+    // Special handling for DLL internal variable if requested
+    if (VariableId == R0SIMULATE_VAR_DLL_ERROR_MODE) {
+        if (Operation == R0SIMULATE_VAR_OP_SET) {
+            g_DllErrorMode = (ULONG)Value;
+            RtlSetLastWin32Error(ERROR_SUCCESS);
+            return TRUE;
+        } else if (Operation == R0SIMULATE_VAR_OP_GET) {
+            if (!pOutBuffer || outSize < sizeof(UINT64)) {
+                RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+                return FALSE;
+            }
+            *(UINT64*)pOutBuffer = g_DllErrorMode;
+            RtlSetLastWin32Error(ERROR_SUCCESS);
+            return TRUE;
+        } else {
+            RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+    }
+
+    // Validate operation and buffers
     if (Operation != R0SIMULATE_VAR_OP_GET &&
         Operation != R0SIMULATE_VAR_OP_SET &&
         Operation != R0SIMULATE_VAR_OP_LIST) {
@@ -488,10 +531,13 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
     );
 
     if (!NT_SUCCESS(status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        SetLastErrorByMode(actualMode, status);
         return FALSE;
     }
 
+    // For LIST operation, we may also want to check if driver returned a status
+    // but the driver does not put a status in the output buffer for this IOCTL,
+    // so we assume success if NtDeviceIoControlFile succeeded.
     if (Operation == R0SIMULATE_VAR_OP_LIST && pInfoCount) {
         if (ioStatus.Information >= sizeof(ULONG)) {
             *pInfoCount = *(ULONG*)pOutBuffer;
