@@ -9,7 +9,7 @@
 static void print_last_error(const char* msg)
 {
     DWORD err = GetLastError();
-    fprintf(stderr, "[!] %s failed, error code: %lu\n", msg, err);
+    fprintf(stderr, "[!] %s failed, error code: %lu (0x%08lX)\n", msg, err, err);
 }
 
 static void PrintCurrentUserName()
@@ -77,7 +77,8 @@ int main(void)
             0,
             listBuffer,
             sizeof(listBuffer),
-            &infoCount
+            &infoCount,
+            R0SIMULATE_ERROR_MODE_DEFAULT
         );
         if (ok)
         {
@@ -102,7 +103,8 @@ int main(void)
             0,
             &val,
             sizeof(val),
-            NULL
+            NULL,
+            R0SIMULATE_ERROR_MODE_DEFAULT
         );
         if (ok)
         {
@@ -112,7 +114,131 @@ int main(void)
         {
             print_last_error("R0S SIV OP_GET");
         }
-        printf("  [SKIP] OP_SET: write operation disabled by test config\n\n");
+
+        printf("  [1.3] OP_GET/OP_SET for DLL internal variable (ErrorMode control)\n");
+        {
+            UINT64 currentMode = 0;
+            // Get current DLL_ErrorMode
+            ok = R0SimulateSetInternalVariables(
+                R0SIMULATE_VAR_OP_GET,
+                R0SIMULATE_VAR_DLL_ERROR_MODE,
+                0,
+                &currentMode,
+                sizeof(currentMode),
+                NULL,
+                R0SIMULATE_ERROR_MODE_DEFAULT
+            );
+            if (ok)
+            {
+                printf("      Current DLL_ErrorMode = %llu (0=convert, 1=raw NTSTATUS)\n", currentMode);
+            }
+            else
+            {
+                print_last_error("R0S SIV GET DLL_ErrorMode");
+            }
+
+            // Test ErrorMode=0 (convert)
+            printf("  [1.4] Force ErrorMode=0 (convert) with invalid ID 0xFFFFFFFF\n");
+            SetLastError(0);
+            UINT64 dummy = 0;
+            ok = R0SimulateSetInternalVariables(
+                R0SIMULATE_VAR_OP_GET,
+                0xFFFFFFFF,
+                0,
+                &dummy,
+                sizeof(dummy),
+                NULL,
+                0
+            );
+            if (!ok)
+            {
+                DWORD err = GetLastError();
+                printf("      FAIL returned, error code = 0x%08lX (%lu)\n", err, err);
+                if (err == ERROR_INVALID_PARAMETER)
+                    printf("      PASS: error converted to Win32 ERROR_INVALID_PARAMETER\n");
+                else
+                    printf("      FAIL: unexpected error code\n");
+            }
+            else
+            {
+                printf("      UNEXPECTED: call succeeded with invalid ID\n");
+            }
+
+            // Test ErrorMode=1 (raw NTSTATUS)
+            printf("  [1.5] Force ErrorMode=1 (raw) with invalid ID 0xFFFFFFFF\n");
+            SetLastError(0);
+            ok = R0SimulateSetInternalVariables(
+                R0SIMULATE_VAR_OP_GET,
+                0xFFFFFFFF,
+                0,
+                &dummy,
+                sizeof(dummy),
+                NULL,
+                1
+            );
+            if (!ok)
+            {
+                DWORD err = GetLastError();
+                printf("      FAIL returned, error code = 0x%08lX (%lu)\n", err, err);
+                if (err == 0xC000000D)
+                    printf("      PASS: error is raw NTSTATUS 0xC000000D\n");
+                else
+                    printf("      FAIL: unexpected error code\n");
+            }
+            else
+            {
+                printf("      UNEXPECTED: call succeeded with invalid ID\n");
+            }
+
+            // Set DLL_ErrorMode=1 and use default mode
+            printf("  [1.6] Set DLL_ErrorMode=1, then use ErrorMode=DEFAULT\n");
+            ok = R0SimulateSetInternalVariables(
+                R0SIMULATE_VAR_OP_SET,
+                R0SIMULATE_VAR_DLL_ERROR_MODE,
+                1,
+                NULL,
+                0,
+                NULL,
+                R0SIMULATE_ERROR_MODE_DEFAULT
+            );
+            if (ok) printf("      DLL_ErrorMode set to 1 successfully\n");
+            else print_last_error("R0S SIV SET DLL_ErrorMode=1");
+
+            SetLastError(0);
+            ok = R0SimulateSetInternalVariables(
+                R0SIMULATE_VAR_OP_GET,
+                0xFFFFFFFF,
+                0,
+                &dummy,
+                sizeof(dummy),
+                NULL,
+                R0SIMULATE_ERROR_MODE_DEFAULT
+            );
+            if (!ok)
+            {
+                DWORD err = GetLastError();
+                printf("      FAIL returned, error code = 0x%08lX (%lu)\n", err, err);
+                if (err == 0xC000000D)
+                    printf("      PASS: default mode used internal value 1 -> raw NTSTATUS\n");
+                else
+                    printf("      FAIL: unexpected error code\n");
+            }
+
+            // Restore DLL_ErrorMode=0
+            printf("  [1.7] Restore DLL_ErrorMode=0\n");
+            ok = R0SimulateSetInternalVariables(
+                R0SIMULATE_VAR_OP_SET,
+                R0SIMULATE_VAR_DLL_ERROR_MODE,
+                0,
+                NULL,
+                0,
+                NULL,
+                R0SIMULATE_ERROR_MODE_DEFAULT
+            );
+            if (ok) printf("      DLL_ErrorMode restored to 0\n");
+            else print_last_error("R0S SIV SET DLL_ErrorMode=0");
+        }
+        printf("\n");
     }
 
     printf("[2] IOCTL_R0SIMULATE_EXEC_INSTRUCTION  (R0S EI)\n");
