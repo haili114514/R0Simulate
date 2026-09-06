@@ -1,5 +1,5 @@
 #define _CRT_SECURE_NO_WARNINGS
-
+#define R0SIMULATES_EXPORTS
 #include <windows.h>
 #include <winioctl.h>
 #include <stdarg.h>
