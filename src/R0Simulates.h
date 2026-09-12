@@ -41,51 +41,29 @@ extern "C" {
 #define R0SKMA_OP_READ     0
 #define R0SKMA_OP_WRITE    1
 
+// ----- R0SKOH Object Types -----
+#define R0SKOH_TYPE_SHIFT      28
+#define R0SKOH_TYPE_MASK       0xF0000000UL
+#define R0SKOH_ATTR_MASK       0x0FFFFFFFUL
+#define R0SKOH_TYPE_GET(f)     (((f) & R0SKOH_TYPE_MASK) >> R0SKOH_TYPE_SHIFT)
+#define R0SKOH_ATTR_GET(f)     ((f) & R0SKOH_ATTR_MASK)
+#define R0SKOH_MAKE_FLAGS(t,a) ((((ULONG)(t)) << R0SKOH_TYPE_SHIFT) | ((a) & R0SKOH_ATTR_MASK))
+
+#define R0SKOH_TYPE_POINTER    0
+#define R0SKOH_TYPE_PID        2
+
 // ----- Internal Variables Operation -----
 #define R0SIMULATE_VAR_OP_GET   0x01
 #define R0SIMULATE_VAR_OP_SET   0x02
 #define R0SIMULATE_VAR_OP_LIST  0x03
 
-// ----- Internal Variable IDs -----
-#define R0SIMULATE_VAR_PREVIOUS_MODE_OFFSET         1
-#define R0SIMULATE_VAR_ACTIVE_PROCESS_LINKS_OFFSET  2
-#define R0SIMULATE_VAR_PRIMARY_TOKEN_FROZEN_OFFSET  3
-#define R0SIMULATE_VAR_FUNCTION_LOOKUP_MODE         4
-#define R0SIMULATE_VAR_GET_FUNCTION_MODE            5
-
-#define VAR_IOCTL_DISABLE_EXEC_INSTRUCTION     6
-#define VAR_IOCTL_DISABLE_CALL_KERNEL_API      7
-#define VAR_IOCTL_DISABLE_PROCESS_HIDING       8
-#define VAR_IOCTL_DISABLE_PREVIOUS_MODE_SWITCH 9
-#define VAR_IOCTL_DISABLE_KERNEL_OPEN_HANDLE   10
-#define VAR_IOCTL_DISABLE_KERNEL_MEMORY_ACCESS 11
-#define VAR_IOCTL_DISABLE_GET_SYSTEM_TOKEN     12
-#define VAR_IOCTL_DISABLE_SET_INTERNAL_VARS    13
-#define VAR_IOCTL_DISABLE_GET_KERNEL_FUNCTION  14
-#define VAR_IOCTL_DISABLE_IO                   15
-
-#define VAR_SECURE_MODE                        16
-#define VAR_COUNT_EXEC_INSTRUCTION             17
-#define VAR_COUNT_CALL_KERNEL_API              18
-#define VAR_COUNT_PROCESS_HIDING               19
-#define VAR_COUNT_PREVIOUS_MODE_SWITCH         20
-#define VAR_COUNT_KERNEL_OPEN_HANDLE           21
-#define VAR_COUNT_KERNEL_MEMORY_ACCESS         22
-#define VAR_COUNT_GET_SYSTEM_TOKEN             23
-#define VAR_COUNT_SET_INTERNAL_VARS            24
-#define VAR_COUNT_GET_KERNEL_FUNCTION          25
-#define VAR_COUNT_IO                           26
-
-#define VAR_ATTR_DESCRIPTOR                    27
-#define VAR_ANTI_KILL                          28
-
 // ----- DLL internal variable ID -----
-#define R0SIMULATE_VAR_DLL_ERROR_MODE          0x1000
+#define R0SIMULATE_VAR_DLL_ERROR_MODE   0x1000
 
 // ----- Error mode control -----
-#define R0SIMULATE_ERROR_MODE_DEFAULT  ((ULONG)-1)
+#define R0SIMULATE_ERROR_MODE_DEFAULT   ((ULONG)-1)
 
-// ----- I/O Port Operations -----
+// ----- I/O Port -----
 #define R0SIO_READ_BYTE     0x01
 #define R0SIO_READ_WORD     0x02
 #define R0SIO_READ_DWORD    0x03
@@ -136,6 +114,18 @@ typedef struct _PREVIOUS_MODE_SWITCH_OUTPUT {
     UCHAR   NewMode;
 } PREVIOUS_MODE_SWITCH_OUTPUT, *PPREVIOUS_MODE_SWITCH_OUTPUT;
 
+typedef struct _KERNEL_OPEN_HANDLE_INPUT {
+    ULONG       Flags;
+    ACCESS_MASK DesiredAccess;
+    UINT64      Target;
+} KERNEL_OPEN_HANDLE_INPUT, *PKERNEL_OPEN_HANDLE_INPUT;
+
+typedef struct _KERNEL_OPEN_HANDLE_OUTPUT {
+    HANDLE      ResultHandle;
+    ACCESS_MASK ActualGrantedAccess;
+    NTSTATUS    Status;
+} KERNEL_OPEN_HANDLE_OUTPUT, *PKERNEL_OPEN_HANDLE_OUTPUT;
+
 typedef struct _KERNEL_MEMORY_ACCESS_INPUT {
     UINT64  Address;
     ULONG   Offset;
@@ -159,6 +149,8 @@ typedef struct _SET_INTERNAL_VAR_INPUT {
     ULONG   Operation;
     ULONG   VariableId;
     UINT64  Value;
+    ULONG   NameLength;
+    UCHAR   Reserved[4];
 } SET_INTERNAL_VAR_INPUT, *PSET_INTERNAL_VAR_INPUT;
 
 typedef struct _VAR_INFO {
@@ -195,14 +187,52 @@ typedef struct _R0S_IO_OUTPUT {
     ULONG   Status;
 } R0S_IO_OUTPUT, *PR0S_IO_OUTPUT;
 
-// ----- Exported functions -----
-R0SIMULATES_API UINT64 R0SimulateISA(const void* pInstruction, ULONG instructionSize);
-R0SIMULATES_API UINT64 R0SimulateAPI(const WCHAR* pwszApiName, ULONG argc, ULONG flags, ...);
-R0SIMULATES_API BOOL R0SimulateKernelProcessHiding(UCHAR operation, ULONG pid, PVOID pOutBuffer, ULONG outSize);
-R0SIMULATES_API BOOL R0SimulatePreviousModeSwitch(BOOL viewOnly, UCHAR mode, UCHAR* pOldMode, UCHAR* pNewMode);
-R0SIMULATES_API HANDLE R0SimulateKernelOpenHandle(ULONG pid);
-R0SIMULATES_API BOOL R0SimulateKernelMemoryAccess(UINT64 Address, ULONG Offset, ULONG Length, UCHAR Operation, PVOID Buffer);
-R0SIMULATES_API HANDLE R0SimulateGetSystemToken(BOOL ReplaceToken);
+// [1] IOCTL_R0SIMULATE_EXEC_INSTRUCTION
+R0SIMULATES_API UINT64 R0SimulateISA(
+    const void* pInstruction,
+    ULONG       instructionSize);
+
+// [2] IOCTL_R0SIMULATE_CALL_KERNEL_API
+R0SIMULATES_API UINT64 R0SimulateAPI(
+    const WCHAR* pwszApiName,
+    ULONG        argc,
+    ULONG        flags,
+    ...);
+
+// [3] IOCTL_R0SIMULATE_KERNEL_PROCESS_HIDING
+R0SIMULATES_API BOOL R0SimulateKernelProcessHiding(
+    UCHAR operation,
+    ULONG pid,
+    PVOID pOutBuffer,
+    ULONG outSize);
+
+// [4] IOCTL_R0SIMULATE_PREVIOUS_MODE_SWITCH
+R0SIMULATES_API BOOL R0SimulatePreviousModeSwitch(
+    BOOL  viewOnly,
+    UCHAR mode,
+    UCHAR* pOldMode,
+    UCHAR* pNewMode);
+
+// [5] IOCTL_R0SIMULATE_KERNEL_OPEN_HANDLE
+R0SIMULATES_API HANDLE R0SimulateKernelOpenHandle(
+    ULONG       Type,
+    ACCESS_MASK DesiredAccess,
+    UINT64      Target,
+    ULONG       Attributes);
+
+// [6] IOCTL_R0SIMULATE_KERNEL_MEMORY_ACCESS
+R0SIMULATES_API BOOL R0SimulateKernelMemoryAccess(
+    UINT64 Address,
+    ULONG  Offset,
+    ULONG  Length,
+    UCHAR  Operation,
+    PVOID  Buffer);
+
+// [7] IOCTL_R0SIMULATE_GET_SYSTEM_TOKEN
+R0SIMULATES_API HANDLE R0SimulateGetSystemToken(
+    BOOL ReplaceToken);
+
+// [8] IOCTL_R0SIMULATE_SET_INTERNAL_VARS
 R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
     ULONG  Operation,
     ULONG  VariableId,
@@ -210,20 +240,21 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
     PVOID  pOutBuffer,
     ULONG  outSize,
     PULONG pInfoCount,
-    ULONG  ErrorMode
-);
+    ULONG  ErrorMode);
+
+// [9] IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION
 R0SIMULATES_API BOOL R0SimulateGetKernelFunction(
     const WCHAR* FunctionName,
     PVOID pOutBuffer,
     ULONG outSize,
-    PULONG pInfoCount
-);
+    PULONG pInfoCount);
+
+// [10] IOCTL_R0SIMULATE_IO
 R0SIMULATES_API BOOL R0SimulateIO(
-    ULONG Operation,
-    ULONG Port,
-    ULONG Value,
-    PULONG pResult
-);
+    ULONG  Operation,
+    ULONG  Port,
+    ULONG  Value,
+    PULONG pResult);
 
 #ifdef __cplusplus
 }
