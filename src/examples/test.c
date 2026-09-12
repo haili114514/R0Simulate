@@ -12,7 +12,7 @@ static void print_last_error(const char* msg)
     fprintf(stderr, "[!] %s failed, error code: %lu (0x%08lX)\n", msg, err, err);
 }
 
-static void PrintCurrentUserName()
+static void PrintCurrentUserName(void)
 {
     HANDLE hToken;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken))
@@ -62,93 +62,82 @@ int main(void)
     const UINT64 tag_DEMO = 0x4F4D4544ULL;
 
     printf("===== R0Simulate IOCTL Test Suite =====\n");
-    printf("Driver: R0Simulate.sys, Test Signing ON\n\n");
+    printf("Driver: R0Simulate.sys, Test Signing ON\n");
+    printf("DLL:    R0Simulates.dll (1 function <-> 1 IOCTL)\n\n");
 
+    
+    
+    
     printf("[1] IOCTL_R0SIMULATE_SET_INTERNAL_VARS  (R0S SIV)\n");
     {
-        UCHAR listBuffer[4096] = {0};
+        UCHAR listBuffer[10000] = {0};
         ULONG infoCount = 0;
-        BOOL ok;
-
+        BOOL  ok;
         printf("  [1.1] OP_LIST: enumerate all driver internal variables\n");
         ok = R0SimulateSetInternalVariables(
             R0SIMULATE_VAR_OP_LIST,
-            0,
-            0,
-            listBuffer,
-            sizeof(listBuffer),
+            0, 0,
+            listBuffer, sizeof(listBuffer),
             &infoCount,
             R0SIMULATE_ERROR_MODE_DEFAULT
         );
         if (ok)
         {
-            printf("      OK: Retrieved %lu variables\n", infoCount);
             PVAR_INFO pInfo = (PVAR_INFO)(listBuffer + sizeof(ULONG));
+            printf("      OK: Retrieved %lu variables\n", infoCount);
             for (ULONG i = 0; i < infoCount; i++)
             {
                 wprintf(L"        ID=%lu, Name=%s, Size=%lu, Value=0x%llX\n",
-                    pInfo[i].Id, pInfo[i].Name, pInfo[i].Size, pInfo[i].Value);
+                        pInfo[i].Id, pInfo[i].Name, pInfo[i].Size, pInfo[i].Value);
+            } 
+            if (infoCount > 0)
+            {
+                ULONG  firstId = pInfo[0].Id;
+                UINT64 val = 0;
+                printf("  [1.2] OP_GET on first enumerated ID=%lu\n", firstId);
+                ok = R0SimulateSetInternalVariables(
+                    R0SIMULATE_VAR_OP_GET,
+                    firstId,
+                    0,
+                    &val, sizeof(val),
+                    NULL,
+                    R0SIMULATE_ERROR_MODE_DEFAULT
+                );
+                if (ok)
+                    printf("      OK: value = 0x%llX\n", val);
+                else
+                    print_last_error("R0S SIV OP_GET");
             }
         }
         else
         {
             print_last_error("R0S SIV OP_LIST");
         }
-
-        printf("  [1.2] OP_GET: read R0SIMULATE_VAR_PREVIOUS_MODE_OFFSET\n");
-        UINT64 val = 0;
-        ok = R0SimulateSetInternalVariables(
-            R0SIMULATE_VAR_OP_GET,
-            R0SIMULATE_VAR_PREVIOUS_MODE_OFFSET,
-            0,
-            &val,
-            sizeof(val),
-            NULL,
-            R0SIMULATE_ERROR_MODE_DEFAULT
-        );
-        if (ok)
-        {
-            printf("      OK: g_PreviousModeOffset = 0x%llX\n", val);
-        }
-        else
-        {
-            print_last_error("R0S SIV OP_GET");
-        }
-
-        printf("  [1.3] OP_GET/OP_SET for DLL internal variable (ErrorMode control)\n");
+        printf("  [1.3] OP_GET DLL internal variable (ErrorMode)\n");
         {
             UINT64 currentMode = 0;
-            // Get current DLL_ErrorMode
             ok = R0SimulateSetInternalVariables(
                 R0SIMULATE_VAR_OP_GET,
                 R0SIMULATE_VAR_DLL_ERROR_MODE,
                 0,
-                &currentMode,
-                sizeof(currentMode),
+                &currentMode, sizeof(currentMode),
                 NULL,
                 R0SIMULATE_ERROR_MODE_DEFAULT
             );
             if (ok)
-            {
                 printf("      Current DLL_ErrorMode = %llu (0=convert, 1=raw NTSTATUS)\n", currentMode);
-            }
             else
-            {
                 print_last_error("R0S SIV GET DLL_ErrorMode");
-            }
-
-            // Test ErrorMode=0 (convert)
-            printf("  [1.4] Force ErrorMode=0 (convert) with invalid ID 0xFFFFFFFF\n");
-            SetLastError(0);
+        }
+        printf("  [1.4] Force ErrorMode=0 (convert) with invalid ID 0xFFFFFFFF\n");
+        SetLastError(0);
+        {
             UINT64 dummy = 0;
             ok = R0SimulateSetInternalVariables(
                 R0SIMULATE_VAR_OP_GET,
-                0xFFFFFFFF,
-                0,
-                &dummy,
-                sizeof(dummy),
-                NULL,
-                0
+                0xFFFFFFFF, 0,
+                &dummy, sizeof(dummy),
+                NULL, 0
             );
             if (!ok)
             {
@@ -160,21 +149,17 @@ int main(void)
                     printf("      FAIL: unexpected error code\n");
             }
             else
-            {
                 printf("      UNEXPECTED: call succeeded with invalid ID\n");
-            }
-
-            // Test ErrorMode=1 (raw NTSTATUS)
-            printf("  [1.5] Force ErrorMode=1 (raw) with invalid ID 0xFFFFFFFF\n");
-            SetLastError(0);
+        }
+        printf("  [1.5] Force ErrorMode=1 (raw) with invalid ID 0xFFFFFFFF\n");
+        SetLastError(0);
+        {
+            UINT64 dummy = 0;
             ok = R0SimulateSetInternalVariables(
                 R0SIMULATE_VAR_OP_GET,
-                0xFFFFFFFF,
-                0,
-                &dummy,
-                sizeof(dummy),
-                NULL,
-                1
+                0xFFFFFFFF, 0,
+                &dummy, sizeof(dummy),
+                NULL, 1
             );
             if (!ok)
             {
@@ -186,31 +171,27 @@ int main(void)
                     printf("      FAIL: unexpected error code\n");
             }
             else
-            {
                 printf("      UNEXPECTED: call succeeded with invalid ID\n");
-            }
+        }
 
-            // Set DLL_ErrorMode=1 and use default mode
-            printf("  [1.6] Set DLL_ErrorMode=1, then use ErrorMode=DEFAULT\n");
-            ok = R0SimulateSetInternalVariables(
-                R0SIMULATE_VAR_OP_SET,
-                R0SIMULATE_VAR_DLL_ERROR_MODE,
-                1,
-                NULL,
-                0,
-                NULL,
-                R0SIMULATE_ERROR_MODE_DEFAULT
-            );
-            if (ok) printf("      DLL_ErrorMode set to 1 successfully\n");
-            else print_last_error("R0S SIV SET DLL_ErrorMode=1");
+        printf("  [1.6] Set DLL_ErrorMode=1, then use ErrorMode=DEFAULT\n");
+        ok = R0SimulateSetInternalVariables(
+            R0SIMULATE_VAR_OP_SET,
+            R0SIMULATE_VAR_DLL_ERROR_MODE,
+            1,
+            NULL, 0, NULL,
+            R0SIMULATE_ERROR_MODE_DEFAULT
+        );
+        if (ok) printf("      DLL_ErrorMode set to 1 successfully\n");
+        else    print_last_error("R0S SIV SET DLL_ErrorMode=1");
 
-            SetLastError(0);
+        SetLastError(0);
+        {
+            UINT64 dummy = 0;
             ok = R0SimulateSetInternalVariables(
                 R0SIMULATE_VAR_OP_GET,
-                0xFFFFFFFF,
-                0,
-                &dummy,
-                sizeof(dummy),
+                0xFFFFFFFF, 0,
+                &dummy, sizeof(dummy),
                 NULL,
                 R0SIMULATE_ERROR_MODE_DEFAULT
             );
@@ -223,24 +204,20 @@ int main(void)
                 else
                     printf("      FAIL: unexpected error code\n");
             }
-
-            // Restore DLL_ErrorMode=0
-            printf("  [1.7] Restore DLL_ErrorMode=0\n");
-            ok = R0SimulateSetInternalVariables(
-                R0SIMULATE_VAR_OP_SET,
-                R0SIMULATE_VAR_DLL_ERROR_MODE,
-                0,
-                NULL,
-                0,
-                NULL,
-                R0SIMULATE_ERROR_MODE_DEFAULT
-            );
-            if (ok) printf("      DLL_ErrorMode restored to 0\n");
-            else print_last_error("R0S SIV SET DLL_ErrorMode=0");
         }
+        printf("  [1.7] Restore DLL_ErrorMode=0\n");
+        ok = R0SimulateSetInternalVariables(
+            R0SIMULATE_VAR_OP_SET,
+            R0SIMULATE_VAR_DLL_ERROR_MODE,
+            0,
+            NULL, 0, NULL,
+            R0SIMULATE_ERROR_MODE_DEFAULT
+        );
+        if (ok) printf("      DLL_ErrorMode restored to 0\n");
+        else    print_last_error("R0S SIV SET DLL_ErrorMode=0");
+
         printf("\n");
     }
-
     printf("[2] IOCTL_R0SIMULATE_EXEC_INSTRUCTION  (R0S EI)\n");
     {
         printf("  [2.1] Execute machine code: mov eax,1234; ret\n");
@@ -257,17 +234,17 @@ int main(void)
             printf("\n");
         }
     }
-
     printf("[3] IOCTL_R0SIMULATE_CALL_KERNEL_API  (R0S API)\n");
     {
+        UINT64 kernelAddr;
+
         printf("  [3.1] ExAllocatePoolWithTag allocate kernel memory\n");
-        UINT64 kernelAddr = R0SimulateAPI(
+        kernelAddr = R0SimulateAPI(
             L"ExAllocatePoolWithTag",
-            3,
-            0,
-            (UINT64)0x200,
-            (UINT64)256,
-            tag_DEMO
+            3, 0,
+            (UINT64)0x200,   
+            (UINT64)256,     
+            tag_DEMO         
         );
         if (kernelAddr == 0)
         {
@@ -286,18 +263,17 @@ int main(void)
         }
         printf("\n");
     }
-
     printf("[4] IOCTL_R0SIMULATE_KERNEL_MEMORY_ACCESS  (R0S KMA)\n");
     {
-        BYTE writeData[] = {0xDE,0xAD,0xBE,0xEF,0x12,0x34,0x56,0x78,0x90,0xAB,0xCD,0xEF};
-        BYTE readBuf[64] = {0};
+        BYTE   writeData[] = {0xDE,0xAD,0xBE,0xEF,0x12,0x34,0x56,0x78,0x90,0xAB,0xCD,0xEF};
+        BYTE   readBuf[64] = {0};
         UINT32 writeLen = sizeof(writeData);
-        BOOL ok;
+        BOOL   ok;
+        UINT64 kernelAddr;
 
-        UINT64 kernelAddr = R0SimulateAPI(
+        kernelAddr = R0SimulateAPI(
             L"ExAllocatePoolWithTag",
-            3,
-            0,
+            3, 0,
             (UINT64)0x200,
             (UINT64)256,
             tag_DEMO
@@ -305,11 +281,12 @@ int main(void)
         if (kernelAddr == 0)
         {
             print_last_error("R0S KMA prereq allocate");
-            goto end_kma;
+            printf("\n");
+            goto kma_done;
         }
 
         printf("  [4.1] Write pattern to kernel buffer\n");
-        ok = R0SimulateKernelMemoryAccess(kernelAddr,0,writeLen,R0SKMA_OP_WRITE,writeData);
+        ok = R0SimulateKernelMemoryAccess(kernelAddr, 0, writeLen, R0SKMA_OP_WRITE, writeData);
         if (!ok)
         {
             print_last_error("R0S KMA write");
@@ -320,7 +297,7 @@ int main(void)
         }
 
         printf("  [4.2] Read back from kernel buffer\n");
-        ok = R0SimulateKernelMemoryAccess(kernelAddr,0,writeLen,R0SKMA_OP_READ,readBuf);
+        ok = R0SimulateKernelMemoryAccess(kernelAddr, 0, writeLen, R0SKMA_OP_READ, readBuf);
         if (!ok)
         {
             print_last_error("R0S KMA read");
@@ -328,33 +305,33 @@ int main(void)
         else
         {
             printf("      OK: read %u bytes: ", writeLen);
-            for(int i=0;i<writeLen;i++) printf("%02X ", readBuf[i]);
+            for (int i = 0; i < (int)writeLen; i++) printf("%02X ", readBuf[i]);
             printf("\n");
-            if(memcmp(writeData, readBuf, writeLen)==0)
+            if (memcmp(writeData, readBuf, writeLen) == 0)
                 printf("      PASS: data compare match\n");
             else
                 printf("      FAIL: data mismatch\n");
         }
 
-end_kma:
-        if(kernelAddr != 0)
-            R0SimulateAPI(L"ExFreePoolWithTag",2,0,kernelAddr,tag_DEMO);
+        R0SimulateAPI(L"ExFreePoolWithTag", 2, 0, kernelAddr, tag_DEMO);
+
+kma_done:
         printf("\n");
     }
-
     printf("[5] IOCTL_R0SIMULATE_KERNEL_PROCESS_HIDING  (R0S KPH)\n");
     {
         NTSTATUS status;
-        BOOL ok;
-        ULONG pid = GetCurrentProcessId();
+        BOOL     ok;
+        ULONG    pid = GetCurrentProcessId();
+
         printf("  [5.1] Hide current process PID=%lu\n", pid);
         ok = R0SimulateKernelProcessHiding(R0SKPH_OP_ADD, pid, &status, sizeof(status));
-        if(ok && NT_SUCCESS(status))
+        if (ok && NT_SUCCESS(status))
         {
             printf("      OK: process hidden\n");
             printf("  [5.2] Restore(unhide) current process\n");
             ok = R0SimulateKernelProcessHiding(R0SKPH_OP_REMOVE, pid, &status, sizeof(status));
-            if(ok && NT_SUCCESS(status))
+            if (ok && NT_SUCCESS(status))
                 printf("      OK: process restored\n");
             else
                 print_last_error("R0S KPH REMOVE");
@@ -368,9 +345,11 @@ end_kma:
 
     printf("[6] IOCTL_R0SIMULATE_GET_SYSTEM_TOKEN  (R0S GST)\n");
     {
+        HANDLE hToken;
+
         printf("  [6.1] Get SYSTEM token handle (no replace)\n");
-        HANDLE hToken = R0SimulateGetSystemToken(FALSE);
-        if(hToken != NULL)
+        hToken = R0SimulateGetSystemToken(FALSE);
+        if (hToken != NULL)
         {
             printf("      OK: token handle = %p\n", hToken);
             CloseHandle(hToken);
@@ -384,16 +363,18 @@ end_kma:
         printf("  [6.2] Replace current process token to SYSTEM (warning!)\n");
         printf("      Before:\n");
         PrintCurrentUserName();
-        HANDLE hDummy = R0SimulateGetSystemToken(TRUE);
-        if(hDummy == NULL && GetLastError() == ERROR_SUCCESS)
         {
-            printf("      OK: token replaced\n");
-            printf("      After:\n");
-            PrintCurrentUserName();
-        }
-        else
-        {
-            print_last_error("R0S GST replace");
+            HANDLE hDummy = R0SimulateGetSystemToken(TRUE);
+            if (hDummy == NULL && GetLastError() == ERROR_SUCCESS)
+            {
+                printf("      OK: token replaced\n");
+                printf("      After:\n");
+                PrintCurrentUserName();
+            }
+            else
+            {
+                print_last_error("R0S GST replace");
+            }
         }
         printf("\n");
     }
@@ -401,15 +382,15 @@ end_kma:
     printf("[7] IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION  (R0S GKF)\n");
     {
         printf("  [7.1] Lookup symbol: ExAllocatePoolWithTag\n");
-        UINT64 funcAddr = 0;
-        BOOL ok = R0SimulateGetKernelFunction(L"ExAllocatePoolWithTag", &funcAddr, sizeof(funcAddr), NULL);
-        if(ok && funcAddr != 0)
         {
-            printf("      OK: ExAllocatePoolWithTag = 0x%016llX\n", funcAddr);
-        }
-        else
-        {
-            print_last_error("R0S GKF symbol lookup");
+            UINT64 funcAddr = 0;
+            BOOL   ok = R0SimulateGetKernelFunction(
+                L"ExAllocatePoolWithTag",
+                &funcAddr, sizeof(funcAddr), NULL);
+            if (ok && funcAddr != 0)
+                printf("      OK: ExAllocatePoolWithTag = 0x%016llX\n", funcAddr);
+            else
+                print_last_error("R0S GKF symbol lookup");
         }
         printf("\n");
     }
@@ -417,22 +398,23 @@ end_kma:
     printf("[8] IOCTL_R0SIMULATE_IO  (R0S IO)\n");
     {
         ULONG ioValue;
-        BOOL ok;
+        BOOL  ok;
+
         printf("  [8.1] Read byte port 0x60\n");
-        ok = R0SimulateIO(R0SIO_READ_BYTE,0x60,0,&ioValue);
-        if(ok)
+        ok = R0SimulateIO(R0SIO_READ_BYTE, 0x60, 0, &ioValue);
+        if (ok)
             printf("      OK: port 0x60 = 0x%02X\n", ioValue);
         else
             print_last_error("R0S IO read byte 0x60");
 
         printf("  [8.2] Write byte port 0x80 value 0xAA\n");
-        ok = R0SimulateIO(R0SIO_WRITE_BYTE,0x80,0xAA,NULL);
-        if(ok)
+        ok = R0SimulateIO(R0SIO_WRITE_BYTE, 0x80, 0xAA, NULL);
+        if (ok)
         {
             printf("      OK: write done\n");
             printf("  [8.3] Read back port 0x80\n");
-            ok = R0SimulateIO(R0SIO_READ_BYTE,0x80,0,&ioValue);
-            if(ok)
+            ok = R0SimulateIO(R0SIO_READ_BYTE, 0x80, 0, &ioValue);
+            if (ok)
                 printf("      OK: port 0x80 = 0x%02X\n", ioValue);
             else
                 printf("      Read back not supported\n");
@@ -447,18 +429,14 @@ end_kma:
     printf("[9] IOCTL_R0SIMULATE_PREVIOUS_MODE_SWITCH  (R0S PMS)\n");
     {
         UCHAR oldMode, newMode;
-        BOOL ok;
+        BOOL  ok;
 
         printf("  [9.1] View only: get current previous mode\n");
         ok = R0SimulatePreviousModeSwitch(TRUE, 0, &oldMode, &newMode);
         if (ok)
-        {
             printf("      OK: current mode = %u, new mode = %u (view only)\n", oldMode, newMode);
-        }
         else
-        {
             print_last_error("R0S PMS view only");
-        }
 
         printf("  [9.2] Switch to kernel mode (0) and verify\n");
         ok = R0SimulatePreviousModeSwitch(FALSE, R0SPMS_MODE_KERNEL, &oldMode, &newMode);
@@ -495,35 +473,48 @@ end_kma:
     printf("[10] IOCTL_R0SIMULATE_KERNEL_OPEN_HANDLE  (R0S KOH)\n");
     {
         ULONG pid = GetCurrentProcessId();
+
         printf("  [10.1] Open handle to current process (PID=%lu)\n", pid);
-        HANDLE hProcess = R0SimulateKernelOpenHandle(pid);
-        if (hProcess != NULL)
         {
-            printf("      OK: got handle = %p\n", hProcess);
-            CloseHandle(hProcess);
-            printf("      Handle closed\n");
-        }
-        else
-        {
-            print_last_error("R0S KOH open process");
+            HANDLE hProcess = R0SimulateKernelOpenHandle(
+                R0SKOH_TYPE_PID,
+                PROCESS_ALL_ACCESS,
+                (UINT64)pid,
+                0);
+            if (hProcess != NULL)
+            {
+                printf("      OK: got handle = %p\n", hProcess);
+                CloseHandle(hProcess);
+                printf("      Handle closed\n");
+            }
+            else
+            {
+                print_last_error("R0S KOH open current process");
+            }
         }
 
         printf("  [10.2] Open handle to system process (PID=4)\n");
-        hProcess = R0SimulateKernelOpenHandle(4);
-        if (hProcess != NULL)
         {
-            printf("      OK: got handle = %p\n", hProcess);
-            CloseHandle(hProcess);
-            printf("      Handle closed\n");
-        }
-        else
-        {
-            print_last_error("R0S KOH open system process");
+            HANDLE hProcess = R0SimulateKernelOpenHandle(
+                R0SKOH_TYPE_PID,
+                PROCESS_QUERY_INFORMATION,
+                (UINT64)4,
+                0);
+            if (hProcess != NULL)
+            {
+                printf("      OK: got handle = %p\n", hProcess);
+                CloseHandle(hProcess);
+                printf("      Handle closed\n");
+            }
+            else
+            {
+                print_last_error("R0S KOH open system process");
+            }
         }
         printf("\n");
     }
 
-    printf("===== All test finished. Press any key to exit =====\n");
+    printf("===== All test finished. Press Enter to exit =====\n");
     (void)getchar();
     return 0;
 }
