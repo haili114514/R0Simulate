@@ -70,7 +70,7 @@ int main(void)
     
     printf("[1] IOCTL_R0SIMULATE_SET_INTERNAL_VARS  (R0S SIV)\n");
     {
-        UCHAR listBuffer[10000] = {0};
+        UCHAR listBuffer[16384] = {0};
         ULONG infoCount = 0;
         BOOL  ok;
         printf("  [1.1] OP_LIST: enumerate all driver internal variables\n");
