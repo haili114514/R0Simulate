@@ -1765,6 +1765,7 @@ static NTSTATUS SetInternalVariables(PVOID InputBuffer, ULONG InputSize,
             pOutVar[idx].Id   = e->Id;
             pOutVar[idx].Size = e->Size;
 
+            // ② 读属性：显示 STATUS_ACCESS_DENIED
             if (bit < 64 && (g_ReadAttrDescriptor & ((UINT64)1 << bit))) {
                 val = 0xC0000022ULL;
             } else {
@@ -1782,6 +1783,7 @@ static NTSTATUS SetInternalVariables(PVOID InputBuffer, ULONG InputSize,
         *Info = required;
         return STATUS_SUCCESS;
     }
+
     {
         PVAR_TABLE_ENTRY target = NULL;
         ULONG            bit    = 0;
@@ -1802,7 +1804,8 @@ static NTSTATUS SetInternalVariables(PVOID InputBuffer, ULONG InputSize,
 
         bit = target->Id - 1;
 
-        if (bit < 64 && (g_ReadAttrDescriptor & ((UINT64)1 << bit)))
+        if (op == R0SIMULATE_VAR_OP_GET &&
+            bit < 64 && (g_ReadAttrDescriptor & ((UINT64)1 << bit)))
             return STATUS_ACCESS_DENIED;
 
         if (op == R0SIMULATE_VAR_OP_SET &&
