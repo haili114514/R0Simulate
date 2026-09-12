@@ -1823,15 +1823,6 @@ static NTSTATUS SetInternalVariables(PVOID InputBuffer, ULONG InputSize,
             return STATUS_SUCCESS;
         }
 
-        if (target->Address == (PVOID)(ULONG_PTR)&g_FunctionLookupMode) {
-            if (pIn->Value != 0 && pIn->Value != 1 && pIn->Value != 2)
-                return STATUS_INVALID_PARAMETER;
-        }
-        if (target->Address == (PVOID)(ULONG_PTR)&g_GetFunctionMode) {
-            if (pIn->Value != 0 && pIn->Value != 1)
-                return STATUS_INVALID_PARAMETER;
-        }
-
         if (target->Size == sizeof(ULONG))       *(ULONG*)target->Address = (ULONG)pIn->Value;
         else if (target->Size == sizeof(UINT64)) *(UINT64*)target->Address = pIn->Value;
         else RtlCopyMemory(target->Address, &pIn->Value, target->Size);
