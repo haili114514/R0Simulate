@@ -227,31 +227,30 @@ PDEVICE_OBJECT  g_DeviceObject = NULL;
 UNICODE_STRING  g_SymLinkName;
 PDRIVER_OBJECT  g_DriverObject = NULL;
 PVOID           g_OriginalUnload = NULL;
-
 static LIST_ENTRY   g_HiddenListHead;
 static KSPIN_LOCK   g_HiddenListLock;
-
 static ULONG  g_PreviousModeOffset        = 0;
 static ULONG  g_ActiveProcessLinksOffset  = 0;
 static ULONG  g_PrimaryTokenFrozenOffset  = 0;
 static ULONG  g_FunctionLookupMode        = 0;
 static ULONG  g_GetFunctionMode           = 0;
-
 static LIST_ENTRY   g_FunctionTableHead;
 static KSPIN_LOCK   g_FunctionTableLock;
 static BOOLEAN      g_FunctionTableBuilt = FALSE;
-
 static LIST_ENTRY   g_SsdtListHead;
 static KSPIN_LOCK   g_SsdtListLock;
 static BOOLEAN      g_SsdtBuilt = FALSE;
-
 static ULONG   g_IoctlDisable[10] = {0};
 static ULONG   g_SecureMode       = 0;
 static ULONG   g_IoctlCount[10]   = {0};
-static UINT64  g_AttrDescriptor   = 0;
 static ULONG   g_AntiKill         = 0;
 static ULONG   g_IoctlTotalCount  = 0;
-
+static UINT64  g_ReadAttrDescriptor  = 0;
+static UINT64  g_WriteAttrDescriptor = 0;
+static UINT64  g_HideAttrDescriptor  = 0;
+static UINT64  g_DriverBase      = 0;
+static ULONG   g_DriverSize      = 0;
+static UINT64  g_IoctlHandler[10] = {0};
 static LIST_ENTRY   g_VarTableHead;
 static KSPIN_LOCK   g_VarTableLock;
 static ULONG        g_VarNextId = 1;
@@ -483,15 +482,11 @@ static VOID FreeVarTable(VOID)
 
 static VOID RegisterAllVariables(VOID)
 {
-    
-    
-    
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_PreviousModeOffset,       L"g_PreviousModeOffset",       NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_ActiveProcessLinksOffset, L"g_ActiveProcessLinksOffset", NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_PrimaryTokenFrozenOffset, L"g_PrimaryTokenFrozenOffset", NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_FunctionLookupMode,       L"g_FunctionLookupMode",       NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_GetFunctionMode,          L"g_GetFunctionMode",          NULL);
-
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_IoctlDisable[0], L"g_IoctlDisable[0]", NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_IoctlDisable[1], L"g_IoctlDisable[1]", NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_IoctlDisable[2], L"g_IoctlDisable[2]", NULL);
@@ -502,9 +497,7 @@ static VOID RegisterAllVariables(VOID)
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_IoctlDisable[7], L"g_IoctlDisable[7]", NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_IoctlDisable[8], L"g_IoctlDisable[8]", NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_IoctlDisable[9], L"g_IoctlDisable[9]", NULL);
-
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_SecureMode, L"g_SecureMode", NULL);
-
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_IoctlCount[0], L"g_IoctlCount[0]", NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_IoctlCount[1], L"g_IoctlCount[1]", NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_IoctlCount[2], L"g_IoctlCount[2]", NULL);
@@ -515,50 +508,44 @@ static VOID RegisterAllVariables(VOID)
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_IoctlCount[7], L"g_IoctlCount[7]", NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_IoctlCount[8], L"g_IoctlCount[8]", NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_IoctlCount[9], L"g_IoctlCount[9]", NULL);
-
-    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_AttrDescriptor,  L"g_AttrDescriptor",  NULL);
     R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_AntiKill,        L"g_AntiKill",        NULL);
     R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_IoctlTotalCount, L"g_IoctlTotalCount", NULL);
-
-    
-    
-    
-
-    
     R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_DeviceObject,   L"g_DeviceObject",   NULL);
     R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_DriverObject,   L"g_DriverObject",   NULL);
     R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_OriginalUnload, L"g_OriginalUnload", NULL);
-
-    
-    
-    
-    
     R0sRegisterVariable(sizeof(USHORT), (PVOID)(ULONG_PTR)&g_SymLinkName.Length,        L"g_SymLinkName.Length",        NULL);
     R0sRegisterVariable(sizeof(USHORT), (PVOID)(ULONG_PTR)&g_SymLinkName.MaximumLength, L"g_SymLinkName.MaximumLength", NULL);
     R0sRegisterVariable(sizeof(PVOID),  (PVOID)(ULONG_PTR)&g_SymLinkName.Buffer,        L"g_SymLinkName.Buffer",        NULL);
-
-    
     R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_HiddenListHead.Flink, L"g_HiddenListHead.Flink", NULL);
     R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_HiddenListHead.Blink, L"g_HiddenListHead.Blink", NULL);
     R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_HiddenListLock,       L"g_HiddenListLock",       NULL);
-
-    
     R0sRegisterVariable(sizeof(PVOID),   (PVOID)(ULONG_PTR)&g_FunctionTableHead.Flink, L"g_FunctionTableHead.Flink", NULL);
     R0sRegisterVariable(sizeof(PVOID),   (PVOID)(ULONG_PTR)&g_FunctionTableHead.Blink, L"g_FunctionTableHead.Blink", NULL);
     R0sRegisterVariable(sizeof(PVOID),   (PVOID)(ULONG_PTR)&g_FunctionTableLock,       L"g_FunctionTableLock",       NULL);
     R0sRegisterVariable(sizeof(BOOLEAN), (PVOID)(ULONG_PTR)&g_FunctionTableBuilt,      L"g_FunctionTableBuilt",      NULL);
-
-    
     R0sRegisterVariable(sizeof(PVOID),   (PVOID)(ULONG_PTR)&g_SsdtListHead.Flink, L"g_SsdtListHead.Flink", NULL);
     R0sRegisterVariable(sizeof(PVOID),   (PVOID)(ULONG_PTR)&g_SsdtListHead.Blink, L"g_SsdtListHead.Blink", NULL);
     R0sRegisterVariable(sizeof(PVOID),   (PVOID)(ULONG_PTR)&g_SsdtListLock,       L"g_SsdtListLock",       NULL);
     R0sRegisterVariable(sizeof(BOOLEAN), (PVOID)(ULONG_PTR)&g_SsdtBuilt,          L"g_SsdtBuilt",          NULL);
-
-    
     R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_VarTableHead.Flink, L"g_VarTableHead.Flink", NULL);
     R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_VarTableHead.Blink, L"g_VarTableHead.Blink", NULL);
     R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_VarTableLock,       L"g_VarTableLock",       NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_VarNextId,          L"g_VarNextId",          NULL);
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_ReadAttrDescriptor,  L"g_ReadAttrDescriptor",  NULL);
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_WriteAttrDescriptor, L"g_WriteAttrDescriptor", NULL);
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_HideAttrDescriptor,  L"g_HideAttrDescriptor",  NULL);
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_DriverBase,      L"g_DriverBase",      NULL);
+    R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_DriverSize,      L"g_DriverSize",      NULL);
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_IoctlHandler[0], L"g_IoctlHandler[0]", NULL);
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_IoctlHandler[1], L"g_IoctlHandler[1]", NULL);
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_IoctlHandler[2], L"g_IoctlHandler[2]", NULL);
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_IoctlHandler[3], L"g_IoctlHandler[3]", NULL);
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_IoctlHandler[4], L"g_IoctlHandler[4]", NULL);
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_IoctlHandler[5], L"g_IoctlHandler[5]", NULL);
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_IoctlHandler[6], L"g_IoctlHandler[6]", NULL);
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_IoctlHandler[7], L"g_IoctlHandler[7]", NULL);
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_IoctlHandler[8], L"g_IoctlHandler[8]", NULL);
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_IoctlHandler[9], L"g_IoctlHandler[9]", NULL);
 }
 
 VOID UpdateAntiKill(VOID)
@@ -1168,6 +1155,19 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     __try {
         UNICODE_STRING devName;
         g_DriverObject = DriverObject;
+        g_DriverBase = (UINT64)(ULONG_PTR)DriverObject->DriverStart;
+        g_DriverSize = DriverObject->DriverSize;
+
+        g_IoctlHandler[IOCTL_INDEX_EXEC_INSTRUCTION]     = (UINT64)(ULONG_PTR)&ExecuteInstruction;
+        g_IoctlHandler[IOCTL_INDEX_CALL_KERNEL_API]      = (UINT64)(ULONG_PTR)&CallKernelApiInternal;
+        g_IoctlHandler[IOCTL_INDEX_PROCESS_HIDING]       = (UINT64)(ULONG_PTR)&ProcessHiding;
+        g_IoctlHandler[IOCTL_INDEX_PREVIOUS_MODE_SWITCH] = (UINT64)(ULONG_PTR)&PreviousModeSwitch;
+        g_IoctlHandler[IOCTL_INDEX_KERNEL_OPEN_HANDLE]   = (UINT64)(ULONG_PTR)&KernelOpenHandleInternal;
+        g_IoctlHandler[IOCTL_INDEX_KERNEL_MEMORY_ACCESS] = (UINT64)(ULONG_PTR)&KernelMemoryAccess;
+        g_IoctlHandler[IOCTL_INDEX_GET_SYSTEM_TOKEN]     = (UINT64)(ULONG_PTR)&GetSystemToken;
+        g_IoctlHandler[IOCTL_INDEX_SET_INTERNAL_VARS]    = (UINT64)(ULONG_PTR)&SetInternalVariables;
+        g_IoctlHandler[IOCTL_INDEX_GET_KERNEL_FUNCTION]  = (UINT64)(ULONG_PTR)&GetKernelFunction;
+        g_IoctlHandler[IOCTL_INDEX_IO]                   = (UINT64)(ULONG_PTR)&IoPortOperation;
 
         RtlInitUnicodeString(&devName, DEVICE_NAME);
         RtlInitUnicodeString(&g_SymLinkName, SYM_LINK_NAME);
@@ -1724,7 +1724,6 @@ static NTSTATUS SetInternalVariables(PVOID InputBuffer, ULONG InputSize,
         op != R0SIMULATE_VAR_OP_SET &&
         op != R0SIMULATE_VAR_OP_LIST)
         return STATUS_INVALID_PARAMETER;
-
     if (op == R0SIMULATE_VAR_OP_LIST) {
         ULONG count = 0;
         KIRQL oldIrql;
@@ -1734,28 +1733,48 @@ static NTSTATUS SetInternalVariables(PVOID InputBuffer, ULONG InputSize,
         ULONG idx;
 
         KeAcquireSpinLock(&g_VarTableLock, &oldIrql);
-        for (p = g_VarTableHead.Flink; p != &g_VarTableHead; p = p->Flink) count++;
+        for (p = g_VarTableHead.Flink; p != &g_VarTableHead; p = p->Flink) {
+            PVAR_TABLE_ENTRY e = CONTAINING_RECORD(p, VAR_TABLE_ENTRY, ListEntry);
+            ULONG bit = e->Id - 1;
+            if (bit < 64 && (g_HideAttrDescriptor & ((UINT64)1 << bit)))
+                continue;
+            count++;
+        }
         KeReleaseSpinLock(&g_VarTableLock, oldIrql);
 
         required = sizeof(ULONG) + count * sizeof(VAR_INFO);
-        if (OutputSize < required) return STATUS_BUFFER_TOO_SMALL;
+        if (OutputSize < required) {
+            *Info = required;
+            return STATUS_BUFFER_TOO_SMALL;
+        }
 
         *(ULONG*)OutputBuffer = count;
         pOutVar = (PVAR_INFO)((PUCHAR)OutputBuffer + sizeof(ULONG));
-
         KeAcquireSpinLock(&g_VarTableLock, &oldIrql);
         idx = 0;
         p = g_VarTableHead.Flink;
         while (p != &g_VarTableHead && idx < count) {
             PVAR_TABLE_ENTRY e = CONTAINING_RECORD(p, VAR_TABLE_ENTRY, ListEntry);
             UINT64 val = 0;
+            ULONG  bit = e->Id - 1;
+            if (bit < 64 && (g_HideAttrDescriptor & ((UINT64)1 << bit))) {
+                p = p->Flink;
+                continue;
+            }
+
             pOutVar[idx].Id   = e->Id;
             pOutVar[idx].Size = e->Size;
-            if (e->Size == sizeof(ULONG))       val = *(ULONG*)e->Address;
-            else if (e->Size == sizeof(UINT64)) val = *(UINT64*)e->Address;
-            else RtlCopyMemory(&val, e->Address, e->Size);
+
+            if (bit < 64 && (g_ReadAttrDescriptor & ((UINT64)1 << bit))) {
+                val = 0xC0000022ULL;
+            } else {
+                if (e->Size == sizeof(ULONG))       val = *(ULONG*)e->Address;
+                else if (e->Size == sizeof(UINT64)) val = *(UINT64*)e->Address;
+                else RtlCopyMemory(&val, e->Address, e->Size);
+            }
+
             pOutVar[idx].Value = val;
-            R0sWcsCopyN(pOutVar[idx].Name, e->Name, 64);
+            R0sWcsCopyN(pOutVar[idx].Name, e->Name, 32);
             idx++;
             p = p->Flink;
         }
@@ -1763,12 +1782,13 @@ static NTSTATUS SetInternalVariables(PVOID InputBuffer, ULONG InputSize,
         *Info = required;
         return STATUS_SUCCESS;
     }
-
     {
         PVAR_TABLE_ENTRY target = NULL;
+        ULONG            bit    = 0;
+
         if (pIn->NameLength > 0) {
             PWCHAR pName;
-            ULONG chars;
+            ULONG  chars;
             if (InputSize < sizeof(SET_INTERNAL_VAR_INPUT) + pIn->NameLength)
                 return STATUS_BUFFER_TOO_SMALL;
             pName = (PWCHAR)((PUCHAR)pIn + sizeof(SET_INTERNAL_VAR_INPUT));
@@ -1780,11 +1800,14 @@ static NTSTATUS SetInternalVariables(PVOID InputBuffer, ULONG InputSize,
         }
         if (!target) return STATUS_INVALID_PARAMETER;
 
-        {
-            ULONG bit = target->Id - 1;
-            if (bit < 64 && (g_AttrDescriptor & ((UINT64)1 << bit)))
-                return STATUS_ACCESS_DENIED;
-        }
+        bit = target->Id - 1;
+
+        if (bit < 64 && (g_ReadAttrDescriptor & ((UINT64)1 << bit)))
+            return STATUS_ACCESS_DENIED;
+
+        if (op == R0SIMULATE_VAR_OP_SET &&
+            bit < 64 && (g_WriteAttrDescriptor & ((UINT64)1 << bit)))
+            return STATUS_ACCESS_DENIED;
 
         if (op == R0SIMULATE_VAR_OP_GET) {
             UINT64 val = 0;
