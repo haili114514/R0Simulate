@@ -53,13 +53,9 @@
 #define IOCTL_INDEX_GET_KERNEL_FUNCTION   8
 #define IOCTL_INDEX_IO                    9
 
-#define R0SKOH_TYPE_SHIFT      28
-#define R0SKOH_TYPE_MASK       0xF0000000UL
-#define R0SKOH_ATTR_MASK       0x0FFFFFFFUL
-#define R0SKOH_TYPE_GET(f)     (((f) & R0SKOH_TYPE_MASK) >> R0SKOH_TYPE_SHIFT)
-#define R0SKOH_ATTR_GET(f)     ((f) & R0SKOH_ATTR_MASK)
-#define R0SKOH_TYPE_POINTER    0
-#define R0SKOH_TYPE_PID        2
+#define R0SKOH_TYPE_HANDLE   0   
+#define R0SKOH_TYPE_POINTER  1   
+#define R0SKOH_TYPE_PID      2   
 
 typedef struct _EXEC_INSTRUCTION_INPUT {
     ULONG   InstructionSize;
@@ -204,15 +200,22 @@ typedef struct _SYSTEM_MODULE_INFORMATION {
 typedef struct _NAME_MAP { ULONG Ssn; WCHAR Name[64]; } NAME_MAP;
 
 typedef struct _KERNEL_OPEN_HANDLE_INPUT {
-    ULONG       Flags;
-    ACCESS_MASK DesiredAccess;
-    UINT64      Target;
+    ULONG       Type;              
+    ULONG       Reserved0;         
+    ACCESS_MASK DesiredAccess;     
+    UINT64      Target;            
+    ULONG       AccessMode;        
+    ULONG       HandleAttributes;  
+    UINT64      ObjectType;        
 } KERNEL_OPEN_HANDLE_INPUT, *PKERNEL_OPEN_HANDLE_INPUT;
 
 typedef struct _KERNEL_OPEN_HANDLE_OUTPUT {
     HANDLE      ResultHandle;
     ACCESS_MASK ActualGrantedAccess;
     NTSTATUS    Status;
+    PVOID       KernelPointer;
+    ULONG       Type;              
+    ULONG       Reserved;
 } KERNEL_OPEN_HANDLE_OUTPUT, *PKERNEL_OPEN_HANDLE_OUTPUT;
 
 typedef struct _VAR_TABLE_ENTRY {
@@ -285,11 +288,8 @@ NTSTATUS DriverCreateClose(PDEVICE_OBJECT, PIRP);
 NTSTATUS DriverDeviceControl(PDEVICE_OBJECT, PIRP);
 
 NTSTATUS InitDynamicOffsets(VOID);
-NTSTATUS ExecuteInstruction(PEPROCESS, PVOID, ULONG, PUINT64);
-NTSTATUS CallKernelApiInternal(PVOID, ULONG, UINT64*, PVOID, ULONG, PUINT64);
 NTSTATUS LazyBuildFunctionTable(VOID);
 NTSTATUS BuildSsdtTable(VOID);
-NTSTATUS KernelOpenHandleInternal(PVOID, ULONG, PVOID, ULONG, PULONG_PTR);
 PSSDT_ENTRY FindSsdtBySsn(ULONG);
 PSSDT_ENTRY FindSsdtByName(const WCHAR*);
 BOOLEAN IsNumberString(const WCHAR*);
@@ -308,13 +308,16 @@ static PVAR_TABLE_ENTRY FindVarByName(const WCHAR*, ULONG);
 static VOID             FreeVarTable(VOID);
 static VOID             RegisterAllVariables(VOID);
 
-static NTSTATUS PreviousModeSwitch(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
-static NTSTATUS ProcessHiding(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
-static NTSTATUS KernelMemoryAccess(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
-static NTSTATUS GetSystemToken(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
-static NTSTATUS SetInternalVariables(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
-static NTSTATUS GetKernelFunction(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
-static NTSTATUS IoPortOperation(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
+NTSTATUS R0SimulateISA(PEPROCESS, PVOID, ULONG, PUINT64);                                          
+NTSTATUS R0SimulateAPI(PVOID, ULONG, UINT64*, PVOID, ULONG, PUINT64);                              
+NTSTATUS R0SimulateKernelProcessHiding(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
+NTSTATUS R0SimulatePreviousModeSwitch(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
+NTSTATUS R0SimulateKernelOpenHandle(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
+NTSTATUS R0SimulateKernelMemoryAccess(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
+NTSTATUS R0SimulateGetSystemToken(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
+NTSTATUS R0SimulateSetInternalVariables(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
+NTSTATUS R0SimulateGetKernelFunction(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
+NTSTATUS R0SimulateIO(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 
 static BOOLEAN R0sWcsEqI(const WCHAR*, const WCHAR*);
 static VOID    R0sWcsCopyN(WCHAR*, const WCHAR*, ULONG);
@@ -1158,16 +1161,16 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         g_DriverBase = (UINT64)(ULONG_PTR)DriverObject->DriverStart;
         g_DriverSize = DriverObject->DriverSize;
 
-        g_IoctlHandler[IOCTL_INDEX_EXEC_INSTRUCTION]     = (UINT64)(ULONG_PTR)&ExecuteInstruction;
-        g_IoctlHandler[IOCTL_INDEX_CALL_KERNEL_API]      = (UINT64)(ULONG_PTR)&CallKernelApiInternal;
-        g_IoctlHandler[IOCTL_INDEX_PROCESS_HIDING]       = (UINT64)(ULONG_PTR)&ProcessHiding;
-        g_IoctlHandler[IOCTL_INDEX_PREVIOUS_MODE_SWITCH] = (UINT64)(ULONG_PTR)&PreviousModeSwitch;
-        g_IoctlHandler[IOCTL_INDEX_KERNEL_OPEN_HANDLE]   = (UINT64)(ULONG_PTR)&KernelOpenHandleInternal;
-        g_IoctlHandler[IOCTL_INDEX_KERNEL_MEMORY_ACCESS] = (UINT64)(ULONG_PTR)&KernelMemoryAccess;
-        g_IoctlHandler[IOCTL_INDEX_GET_SYSTEM_TOKEN]     = (UINT64)(ULONG_PTR)&GetSystemToken;
-        g_IoctlHandler[IOCTL_INDEX_SET_INTERNAL_VARS]    = (UINT64)(ULONG_PTR)&SetInternalVariables;
-        g_IoctlHandler[IOCTL_INDEX_GET_KERNEL_FUNCTION]  = (UINT64)(ULONG_PTR)&GetKernelFunction;
-        g_IoctlHandler[IOCTL_INDEX_IO]                   = (UINT64)(ULONG_PTR)&IoPortOperation;
+        g_IoctlHandler[IOCTL_INDEX_EXEC_INSTRUCTION]     = (UINT64)(ULONG_PTR)&R0SimulateISA;
+        g_IoctlHandler[IOCTL_INDEX_CALL_KERNEL_API]      = (UINT64)(ULONG_PTR)&R0SimulateAPI;
+        g_IoctlHandler[IOCTL_INDEX_PROCESS_HIDING]       = (UINT64)(ULONG_PTR)&R0SimulateKernelProcessHiding;
+        g_IoctlHandler[IOCTL_INDEX_PREVIOUS_MODE_SWITCH] = (UINT64)(ULONG_PTR)&R0SimulatePreviousModeSwitch;
+        g_IoctlHandler[IOCTL_INDEX_KERNEL_OPEN_HANDLE]   = (UINT64)(ULONG_PTR)&R0SimulateKernelOpenHandle;
+        g_IoctlHandler[IOCTL_INDEX_KERNEL_MEMORY_ACCESS] = (UINT64)(ULONG_PTR)&R0SimulateKernelMemoryAccess;
+        g_IoctlHandler[IOCTL_INDEX_GET_SYSTEM_TOKEN]     = (UINT64)(ULONG_PTR)&R0SimulateGetSystemToken;
+        g_IoctlHandler[IOCTL_INDEX_SET_INTERNAL_VARS]    = (UINT64)(ULONG_PTR)&R0SimulateSetInternalVariables;
+        g_IoctlHandler[IOCTL_INDEX_GET_KERNEL_FUNCTION]  = (UINT64)(ULONG_PTR)&R0SimulateGetKernelFunction;
+        g_IoctlHandler[IOCTL_INDEX_IO]                   = (UINT64)(ULONG_PTR)&R0SimulateIO;
 
         RtlInitUnicodeString(&devName, DEVICE_NAME);
         RtlInitUnicodeString(&g_SymLinkName, SYM_LINK_NAME);
@@ -1218,7 +1221,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 
 VOID DriverUnload(PDRIVER_OBJECT DriverObject)
 {
-    
     KIRQL oldIrql;
     PLIST_ENTRY pList;
     PLIST_ENTRY pNext;
@@ -1231,7 +1233,6 @@ VOID DriverUnload(PDRIVER_OBJECT DriverObject)
 
     UNREFERENCED_PARAMETER(DriverObject);
 
-    
     __try {
         KeAcquireSpinLock(&g_HiddenListLock, &oldIrql);
         pList = g_HiddenListHead.Flink;
@@ -1256,7 +1257,6 @@ VOID DriverUnload(PDRIVER_OBJECT DriverObject)
         KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
     } __except(EXCEPTION_EXECUTE_HANDLER) { }
 
-    
     __try {
         KeAcquireSpinLock(&g_FunctionTableLock, &oldIrql);
         pList = g_FunctionTableHead.Flink;
@@ -1275,7 +1275,6 @@ VOID DriverUnload(PDRIVER_OBJECT DriverObject)
         KeReleaseSpinLock(&g_FunctionTableLock, oldIrql);
     } __except(EXCEPTION_EXECUTE_HANDLER) { }
 
-    
     __try {
         KeAcquireSpinLock(&g_SsdtListLock, &oldIrql);
         pList = g_SsdtListHead.Flink;
@@ -1293,10 +1292,8 @@ VOID DriverUnload(PDRIVER_OBJECT DriverObject)
         KeReleaseSpinLock(&g_SsdtListLock, oldIrql);
     } __except(EXCEPTION_EXECUTE_HANDLER) { }
 
-    
     __try { FreeVarTable(); } __except(EXCEPTION_EXECUTE_HANDLER) { }
 
-    
     __try {
         if (g_DeviceObject) {
             IoDeleteSymbolicLink(&g_SymLinkName);
@@ -1315,8 +1312,8 @@ NTSTATUS DriverCreateClose(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     return STATUS_SUCCESS;
 }
 
-NTSTATUS ExecuteInstruction(PEPROCESS TargetProcess, PVOID InstructionCode,
-                            ULONG InstructionSize, UINT64 *ReturnValue)
+NTSTATUS R0SimulateISA(PEPROCESS TargetProcess, PVOID InstructionCode,
+                       ULONG InstructionSize, UINT64 *ReturnValue)
 {
     NTSTATUS status = STATUS_SUCCESS;
     PVOID execMem = NULL;
@@ -1355,8 +1352,8 @@ NTSTATUS ExecuteInstruction(PEPROCESS TargetProcess, PVOID InstructionCode,
     return status;
 }
 
-NTSTATUS CallKernelApiInternal(PVOID ApiAddress, ULONG Argc, UINT64 *Args,
-                               PVOID OutputBuffer, ULONG OutputSize, UINT64 *ReturnValue)
+NTSTATUS R0SimulateAPI(PVOID ApiAddress, ULONG Argc, UINT64 *Args,
+                       PVOID OutputBuffer, ULONG OutputSize, UINT64 *ReturnValue)
 {
     NTSTATUS status = STATUS_SUCCESS;
     UINT64 ret = 0;
@@ -1404,8 +1401,8 @@ NTSTATUS CallKernelApiInternal(PVOID ApiAddress, ULONG Argc, UINT64 *Args,
     return status;
 }
 
-static NTSTATUS PreviousModeSwitch(PVOID InputBuffer, ULONG InputSize,
-                                   PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
+NTSTATUS R0SimulatePreviousModeSwitch(PVOID InputBuffer, ULONG InputSize,
+                                      PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
 {
     NTSTATUS status = STATUS_SUCCESS;
     PPREVIOUS_MODE_SWITCH_INPUT pInput;
@@ -1451,8 +1448,8 @@ static NTSTATUS PreviousModeSwitch(PVOID InputBuffer, ULONG InputSize,
     return status;
 }
 
-static NTSTATUS ProcessHiding(PVOID InputBuffer, ULONG InputSize,
-                              PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
+NTSTATUS R0SimulateKernelProcessHiding(PVOID InputBuffer, ULONG InputSize,
+                                       PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
 {
     NTSTATUS status = STATUS_SUCCESS;
     PPROCESS_HIDING_INPUT pIn;
@@ -1563,7 +1560,6 @@ static NTSTATUS ProcessHiding(PVOID InputBuffer, ULONG InputSize,
         return STATUS_SUCCESS;
     }
 
-    
     {
         ULONG maxCount = 0;
         KIRQL oldIrql;
@@ -1589,8 +1585,8 @@ static NTSTATUS ProcessHiding(PVOID InputBuffer, ULONG InputSize,
     }
 }
 
-static NTSTATUS KernelMemoryAccess(PVOID InputBuffer, ULONG InputSize,
-                                   PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
+NTSTATUS R0SimulateKernelMemoryAccess(PVOID InputBuffer, ULONG InputSize,
+                                      PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
 {
     NTSTATUS status = STATUS_SUCCESS;
     PKERNEL_MEMORY_ACCESS_INPUT pIn;
@@ -1622,8 +1618,8 @@ static NTSTATUS KernelMemoryAccess(PVOID InputBuffer, ULONG InputSize,
     return opStatus;
 }
 
-static NTSTATUS GetSystemToken(PVOID InputBuffer, ULONG InputSize,
-                               PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
+NTSTATUS R0SimulateGetSystemToken(PVOID InputBuffer, ULONG InputSize,
+                                  PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
 {
     NTSTATUS status = STATUS_SUCCESS;
     HANDLE systemProcessHandle = NULL;
@@ -1708,8 +1704,8 @@ static NTSTATUS GetSystemToken(PVOID InputBuffer, ULONG InputSize,
     return status;
 }
 
-static NTSTATUS SetInternalVariables(PVOID InputBuffer, ULONG InputSize,
-                                     PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
+NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
+                                        PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
 {
     NTSTATUS status = STATUS_SUCCESS;
     PSET_INTERNAL_VAR_INPUT pIn;
@@ -1724,6 +1720,7 @@ static NTSTATUS SetInternalVariables(PVOID InputBuffer, ULONG InputSize,
         op != R0SIMULATE_VAR_OP_SET &&
         op != R0SIMULATE_VAR_OP_LIST)
         return STATUS_INVALID_PARAMETER;
+
     if (op == R0SIMULATE_VAR_OP_LIST) {
         ULONG count = 0;
         KIRQL oldIrql;
@@ -1765,7 +1762,6 @@ static NTSTATUS SetInternalVariables(PVOID InputBuffer, ULONG InputSize,
             pOutVar[idx].Id   = e->Id;
             pOutVar[idx].Size = e->Size;
 
-            // ② 读属性：显示 STATUS_ACCESS_DENIED
             if (bit < 64 && (g_ReadAttrDescriptor & ((UINT64)1 << bit))) {
                 val = 0xC0000022ULL;
             } else {
@@ -1834,8 +1830,8 @@ static NTSTATUS SetInternalVariables(PVOID InputBuffer, ULONG InputSize,
     return status;
 }
 
-static NTSTATUS GetKernelFunction(PVOID InputBuffer, ULONG InputSize,
-                                  PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
+NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
+                                     PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
 {
     NTSTATUS status = STATUS_SUCCESS;
     KIRQL oldIrql;
@@ -1981,8 +1977,8 @@ static NTSTATUS GetKernelFunction(PVOID InputBuffer, ULONG InputSize,
     }
 }
 
-static NTSTATUS IoPortOperation(PVOID InputBuffer, ULONG InputSize,
-                                PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
+NTSTATUS R0SimulateIO(PVOID InputBuffer, ULONG InputSize,
+                      PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
 {
     NTSTATUS status = STATUS_SUCCESS;
     PR0S_IO_INPUT pIn;
@@ -2023,97 +2019,129 @@ static NTSTATUS IoPortOperation(PVOID InputBuffer, ULONG InputSize,
     return STATUS_SUCCESS;
 }
 
-NTSTATUS KernelOpenHandleInternal(PVOID InputBuffer, ULONG InputSize,
-                                  PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
+NTSTATUS R0SimulateKernelOpenHandle(PVOID InputBuffer, ULONG InputSize,
+                                    PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
 {
-    NTSTATUS                  status  = STATUS_SUCCESS;
-    KERNEL_OPEN_HANDLE_INPUT  in;
-    KERNEL_OPEN_HANDLE_OUTPUT out;
-    ULONG            type = 0;
-    ULONG            attr = 0;
-    ULONG            pid  = 0;
-    PVOID            pObject  = NULL;
-    PEPROCESS        pProcess = NULL;
-    HANDLE           hKernel  = NULL;
-    HANDLE           hUser    = NULL;
-    KPROCESSOR_MODE  mode     = KernelMode;
+    NTSTATUS                   status = STATUS_SUCCESS;
+    KERNEL_OPEN_HANDLE_INPUT   in;
+    KERNEL_OPEN_HANDLE_OUTPUT  out;
+    KPROCESSOR_MODE            mode;
+    POBJECT_TYPE               objType       = NULL;
+    PVOID                      referencedObj = NULL;
+    HANDLE                     resultHandle  = NULL;
+    PEPROCESS                  pProcess      = NULL;
+    PVOID                      pObject       = NULL;
 
-    
+    if (Info) *Info = 0;
+
     if (!InputBuffer || InputSize < sizeof(KERNEL_OPEN_HANDLE_INPUT))
         return STATUS_INVALID_PARAMETER;
     if (!OutputBuffer || OutputSize < sizeof(KERNEL_OPEN_HANDLE_OUTPUT))
         return STATUS_BUFFER_TOO_SMALL;
 
-    
-    RtlZeroMemory(&in, sizeof(in));
+    RtlZeroMemory(&in,  sizeof(in));
     RtlZeroMemory(&out, sizeof(out));
-    RtlCopyMemory(&in, InputBuffer, sizeof(in));
 
-    type = R0SKOH_TYPE_GET(in.Flags);
-    attr = R0SKOH_ATTR_GET(in.Flags);
-
-    
     __try {
-        if (type == R0SKOH_TYPE_PID) {
-            pid = (ULONG)(in.Target & 0xFFFFFFFFu);
-            if (pid == 0) { status = STATUS_INVALID_PARAMETER; __leave; }
+        RtlCopyMemory(&in, InputBuffer, sizeof(in));
 
-            status = PsLookupProcessByProcessId((HANDLE)(ULONG_PTR)pid, &pProcess);
-            if (!NT_SUCCESS(status)) { __leave; }
-            pObject = pProcess;
+        
+        mode    = (KPROCESSOR_MODE)in.AccessMode;          
+        objType = (POBJECT_TYPE)(ULONG_PTR)in.ObjectType;  
 
-        } else if (type == R0SKOH_TYPE_POINTER) {
-            pObject = (PVOID)(ULONG_PTR)in.Target;
-            if (pObject == NULL) { status = STATUS_INVALID_PARAMETER; __leave; }
-        } else {
-            status = STATUS_INVALID_PARAMETER;
-            __leave;
+        
+
+        if (in.Type == R0SKOH_TYPE_HANDLE) {
+            status = ObReferenceObjectByHandle(
+                        (HANDLE)(ULONG_PTR)in.Target,
+                        in.DesiredAccess,
+                        objType,                 
+                        mode,
+                        &referencedObj,
+                        NULL);
+
+            out.ResultHandle        = NULL;
+            out.ActualGrantedAccess = in.DesiredAccess;
+            out.Status              = status;
+            out.KernelPointer       = referencedObj;
+            out.Type                = R0SKOH_TYPE_HANDLE;
+            out.Reserved            = 0;
+
+            if (referencedObj != NULL) ObDereferenceObject(referencedObj);
         }
+        
 
-        mode = (attr & OBJ_FORCE_ACCESS_CHECK) ? UserMode : KernelMode;
+        else if (in.Type == R0SKOH_TYPE_POINTER) {
+            pObject = (PVOID)(ULONG_PTR)in.Target;
 
-        status = ObOpenObjectByPointer(
-            pObject,
-            OBJ_KERNEL_HANDLE,
-            NULL,
-            in.DesiredAccess,
-            NULL,
-            mode,
-            &hKernel);
-        if (!NT_SUCCESS(status)) { __leave; }
+            if (pObject != NULL) {
+                status = ObOpenObjectByPointer(
+                            pObject,
+                            in.HandleAttributes,     
+                            NULL,
+                            in.DesiredAccess,        
+                            objType,                 
+                            mode,                    
+                            &resultHandle);
+            } else {
+                status = STATUS_INVALID_PARAMETER;
+            }
 
-        status = ZwDuplicateObject(
-            ZwCurrentProcess(), hKernel,
-            ZwCurrentProcess(), &hUser,
-            in.DesiredAccess,
-            0,
-            0);
-        if (!NT_SUCCESS(status)) { __leave; }
+            out.ResultHandle        = resultHandle;
+            out.ActualGrantedAccess = in.DesiredAccess;
+            out.Status              = status;
+            out.KernelPointer       = pObject;
+            out.Type                = R0SKOH_TYPE_POINTER;
+            out.Reserved            = 0;
+        }
+        
 
-        out.ResultHandle        = hUser;
-        out.ActualGrantedAccess = in.DesiredAccess;
-        out.Status              = STATUS_SUCCESS;
-        hUser                   = NULL;   
-        status                  = STATUS_SUCCESS;
+        else if (in.Type == R0SKOH_TYPE_PID) {
+            ULONG pid = (ULONG)(in.Target & 0xFFFFFFFFu);
+
+            if (pid != 0) {
+                status = PsLookupProcessByProcessId((HANDLE)(ULONG_PTR)pid, &pProcess);
+                if (NT_SUCCESS(status)) {
+                    status = ObOpenObjectByPointer(
+                                pProcess,
+                                in.HandleAttributes,
+                                NULL,
+                                in.DesiredAccess,
+                                objType,
+                                mode,
+                                &resultHandle);
+                    ObDereferenceObject(pProcess);
+                    pProcess = NULL;
+                }
+            } else {
+                status = STATUS_INVALID_PARAMETER;
+            }
+
+            out.ResultHandle        = resultHandle;
+            out.ActualGrantedAccess = in.DesiredAccess;
+            out.Status              = status;
+            out.KernelPointer       = NULL;
+            out.Type                = R0SKOH_TYPE_PID;
+            out.Reserved            = 0;
+        }
+        else {
+            status     = STATUS_INVALID_PARAMETER;
+            out.Status = status;
+        }
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
-        status = GetExceptionCode();
+        status            = GetExceptionCode();
+        out.Status        = status;
+        out.ResultHandle  = NULL;
+        out.KernelPointer = NULL;
     }
 
-    
-    if (hKernel  != NULL) { __try { ZwClose(hKernel);  } __except(EXCEPTION_EXECUTE_HANDLER) {} }
-    if (hUser    != NULL) { __try { ZwClose(hUser);    } __except(EXCEPTION_EXECUTE_HANDLER) {} }
-    if (pProcess != NULL) { __try { ObDereferenceObject(pProcess); } __except(EXCEPTION_EXECUTE_HANDLER) {} }
-
-    if (!NT_SUCCESS(status)) {
-        out.ResultHandle        = NULL;
-        out.ActualGrantedAccess = 0;
-        out.Status              = status;
+    __try {
+        RtlCopyMemory(OutputBuffer, &out, sizeof(out));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return GetExceptionCode();
     }
-
-    
-    RtlCopyMemory(OutputBuffer, &out, sizeof(out));
-    *Info = sizeof(out);
+    if (Info) *Info = sizeof(out);
     return status;
 }
 
@@ -2156,7 +2184,7 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                     if (execInput->InstructionSize == 0) { status = STATUS_INVALID_PARAMETER; break; }
                     if (inputSize < sizeof(EXEC_INSTRUCTION_INPUT) + execInput->InstructionSize - 1) { status = STATUS_BUFFER_TOO_SMALL; break; }
                     if (outputSize < sizeof(EXEC_INSTRUCTION_OUTPUT)) { status = STATUS_BUFFER_TOO_SMALL; break; }
-                    status = ExecuteInstruction(PsGetCurrentProcess(), execInput->Instruction, execInput->InstructionSize, &returnValue);
+                    status = R0SimulateISA(PsGetCurrentProcess(), execInput->Instruction, execInput->InstructionSize, &returnValue);
                     output = (PEXEC_INSTRUCTION_OUTPUT)outputBuffer;
                     output->ReturnValue = returnValue;
                     output->Status = status;
@@ -2235,8 +2263,8 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                     }
                     if (!NT_SUCCESS(status)) break;
 
-                    status = CallKernelApiInternal(apiAddress, apiInput->ArgumentCount, apiInput->Arguments,
-                                                   outputBuffer, outputSize, &returnValue);
+                    status = R0SimulateAPI(apiAddress, apiInput->ArgumentCount, apiInput->Arguments,
+                                           outputBuffer, outputSize, &returnValue);
                     output = (PCALL_KERNEL_API_OUTPUT)outputBuffer;
                     output->ReturnValue = returnValue;
                     output->Status = status;
@@ -2250,7 +2278,12 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                 int idx = IOCTL_INDEX_PROCESS_HIDING;
                 if (g_IoctlDisable[idx] == 1) { status = STATUS_ACCESS_DENIED; break; }
                 if (g_SecureMode == 1 && !HasTcbPrivilege()) { status = STATUS_ACCESS_DENIED; break; }
-                status = ProcessHiding(inputBuffer, inputSize, outputBuffer, outputSize, &info);
+                __try {
+                    status = R0SimulateKernelProcessHiding(inputBuffer, inputSize, outputBuffer, outputSize, &info);
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                    status = GetExceptionCode();
+                    info   = 0;
+                }
                 if (NT_SUCCESS(status)) g_IoctlCount[idx]++;
                 break;
             }
@@ -2259,7 +2292,12 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                 int idx = IOCTL_INDEX_PREVIOUS_MODE_SWITCH;
                 if (g_IoctlDisable[idx] == 1) { status = STATUS_ACCESS_DENIED; break; }
                 if (g_SecureMode == 1 && !HasTcbPrivilege()) { status = STATUS_ACCESS_DENIED; break; }
-                status = PreviousModeSwitch(inputBuffer, inputSize, outputBuffer, outputSize, &info);
+                __try {
+                    status = R0SimulatePreviousModeSwitch(inputBuffer, inputSize, outputBuffer, outputSize, &info);
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                    status = GetExceptionCode();
+                    info   = 0;
+                }
                 if (NT_SUCCESS(status)) g_IoctlCount[idx]++;
                 break;
             }
@@ -2268,7 +2306,13 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                 int idx = IOCTL_INDEX_KERNEL_OPEN_HANDLE;
                 if (g_IoctlDisable[idx] == 1) { status = STATUS_ACCESS_DENIED; break; }
                 if (g_SecureMode == 1 && !HasTcbPrivilege()) { status = STATUS_ACCESS_DENIED; break; }
-                status = KernelOpenHandleInternal(inputBuffer, inputSize, outputBuffer, outputSize, &info);
+                __try {
+                    status = R0SimulateKernelOpenHandle(inputBuffer, inputSize,
+                                                        outputBuffer, outputSize, &info);
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                    status = GetExceptionCode();
+                    info   = 0;
+                }
                 if (NT_SUCCESS(status)) g_IoctlCount[idx]++;
                 break;
             }
@@ -2277,7 +2321,12 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                 int idx = IOCTL_INDEX_KERNEL_MEMORY_ACCESS;
                 if (g_IoctlDisable[idx] == 1) { status = STATUS_ACCESS_DENIED; break; }
                 if (g_SecureMode == 1 && !HasTcbPrivilege()) { status = STATUS_ACCESS_DENIED; break; }
-                status = KernelMemoryAccess(inputBuffer, inputSize, outputBuffer, outputSize, &info);
+                __try {
+                    status = R0SimulateKernelMemoryAccess(inputBuffer, inputSize, outputBuffer, outputSize, &info);
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                    status = GetExceptionCode();
+                    info   = 0;
+                }
                 if (NT_SUCCESS(status)) g_IoctlCount[idx]++;
                 break;
             }
@@ -2286,7 +2335,12 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                 int idx = IOCTL_INDEX_GET_SYSTEM_TOKEN;
                 if (g_IoctlDisable[idx] == 1) { status = STATUS_ACCESS_DENIED; break; }
                 if (g_SecureMode == 1 && !HasTcbPrivilege()) { status = STATUS_ACCESS_DENIED; break; }
-                status = GetSystemToken(inputBuffer, inputSize, outputBuffer, outputSize, &info);
+                __try {
+                    status = R0SimulateGetSystemToken(inputBuffer, inputSize, outputBuffer, outputSize, &info);
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                    status = GetExceptionCode();
+                    info   = 0;
+                }
                 if (NT_SUCCESS(status)) g_IoctlCount[idx]++;
                 break;
             }
@@ -2295,7 +2349,12 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                 int idx = IOCTL_INDEX_SET_INTERNAL_VARS;
                 if (g_IoctlDisable[idx] == 1) { status = STATUS_ACCESS_DENIED; break; }
                 if (g_SecureMode == 1 && !HasTcbPrivilege()) { status = STATUS_ACCESS_DENIED; break; }
-                status = SetInternalVariables(inputBuffer, inputSize, outputBuffer, outputSize, &info);
+                __try {
+                    status = R0SimulateSetInternalVariables(inputBuffer, inputSize, outputBuffer, outputSize, &info);
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                    status = GetExceptionCode();
+                    info   = 0;
+                }
                 if (NT_SUCCESS(status)) g_IoctlCount[idx]++;
                 break;
             }
@@ -2304,7 +2363,12 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                 int idx = IOCTL_INDEX_GET_KERNEL_FUNCTION;
                 if (g_IoctlDisable[idx] == 1) { status = STATUS_ACCESS_DENIED; break; }
                 if (g_SecureMode == 1 && !HasTcbPrivilege()) { status = STATUS_ACCESS_DENIED; break; }
-                status = GetKernelFunction(inputBuffer, inputSize, outputBuffer, outputSize, &info);
+                __try {
+                    status = R0SimulateGetKernelFunction(inputBuffer, inputSize, outputBuffer, outputSize, &info);
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                    status = GetExceptionCode();
+                    info   = 0;
+                }
                 if (NT_SUCCESS(status)) g_IoctlCount[idx]++;
                 break;
             }
@@ -2313,7 +2377,12 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                 int idx = IOCTL_INDEX_IO;
                 if (g_IoctlDisable[idx] == 1) { status = STATUS_ACCESS_DENIED; break; }
                 if (g_SecureMode == 1 && !HasTcbPrivilege()) { status = STATUS_ACCESS_DENIED; break; }
-                status = IoPortOperation(inputBuffer, inputSize, outputBuffer, outputSize, &info);
+                __try {
+                    status = R0SimulateIO(inputBuffer, inputSize, outputBuffer, outputSize, &info);
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                    status = GetExceptionCode();
+                    info   = 0;
+                }
                 if (NT_SUCCESS(status)) g_IoctlCount[idx]++;
                 break;
             }

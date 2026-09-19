@@ -101,7 +101,7 @@ static void R0Sim_CloseDriver(void) {
     }
 }
 
-static ULONG g_DllErrorMode = 0;   
+static ULONG g_DllErrorMode = 0;
 
 static void SetLastErrorByMode(ULONG errorMode, NTSTATUS status) {
     if (errorMode == 1) {
@@ -379,50 +379,59 @@ R0SIMULATES_API BOOL R0SimulatePreviousModeSwitch(BOOL viewOnly, UCHAR mode, UCH
     return result;
 }
 
-R0SIMULATES_API HANDLE R0SimulateKernelOpenHandle(
+R0SIMULATES_API BOOL R0SimulateKernelOpenHandle(
     ULONG       Type,
     ACCESS_MASK DesiredAccess,
     UINT64      Target,
-    ULONG       Attributes)
+    ULONG       AccessMode,
+    ULONG       HandleAttributes,
+    UINT64      ObjectType,
+    PKERNEL_OPEN_HANDLE_OUTPUT pOut)
 {
-    HANDLE result = NULL;
-    KERNEL_OPEN_HANDLE_INPUT  in;
-    KERNEL_OPEN_HANDLE_OUTPUT out;
-    IO_STATUS_BLOCK ioStatus;
-    NTSTATUS status;
+    KERNEL_OPEN_HANDLE_INPUT in;
+    IO_STATUS_BLOCK          ioStatus;
+    NTSTATUS                 status;
 
-    if (!R0Sim_OpenDriver()) return NULL;
-
-    if (Type != R0SKOH_TYPE_POINTER && Type != R0SKOH_TYPE_PID) {
+    if (!R0Sim_OpenDriver()) return FALSE;
+    if (!pOut) {
         RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
-        return NULL;
+        return FALSE;
+    }
+    if (Type != R0SKOH_TYPE_HANDLE &&
+        Type != R0SKOH_TYPE_POINTER &&
+        Type != R0SKOH_TYPE_PID) {
+        RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+        return FALSE;
     }
 
     memset(&in, 0, sizeof(in));
-    in.Flags         = R0SKOH_MAKE_FLAGS(Type, Attributes);
-    in.DesiredAccess = DesiredAccess;
-    in.Target        = Target;
+    memset(pOut, 0, sizeof(KERNEL_OPEN_HANDLE_OUTPUT));
 
-    memset(&out, 0, sizeof(out));
+    in.Type             = Type;
+    in.Reserved0        = 0;
+    in.DesiredAccess    = DesiredAccess;
+    in.Target           = Target;
+    in.AccessMode       = AccessMode;
+    in.HandleAttributes = HandleAttributes;
+    in.ObjectType       = ObjectType;
 
+    memset(&ioStatus, 0, sizeof(ioStatus));
     status = NtDeviceIoControlFile(
         g_hDriver, NULL, NULL, NULL, &ioStatus,
         IOCTL_R0SIMULATE_KERNEL_OPEN_HANDLE,
         &in, sizeof(in),
-        &out, sizeof(out)
-    );
+        pOut, sizeof(KERNEL_OPEN_HANDLE_OUTPUT));
 
     if (!NT_SUCCESS(status)) {
         RtlSetLastWin32Error(NtStatusToWin32Error(status));
-        return NULL;
+        return FALSE;
     }
-    if (!NT_SUCCESS(out.Status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(out.Status));
-        return NULL;
+    if (!NT_SUCCESS((NTSTATUS)pOut->Status)) {
+        RtlSetLastWin32Error(NtStatusToWin32Error((NTSTATUS)pOut->Status));
+        return FALSE;
     }
     RtlSetLastWin32Error(ERROR_SUCCESS);
-    result = out.ResultHandle;
-    return result;
+    return TRUE;
 }
 
 R0SIMULATES_API BOOL R0SimulateKernelMemoryAccess(UINT64 Address, ULONG Offset, ULONG Length, UCHAR Operation, PVOID Buffer) {
@@ -530,14 +539,12 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
 
     if (!R0Sim_OpenDriver()) return FALSE;
 
-    
     if (ErrorMode == R0SIMULATE_ERROR_MODE_DEFAULT) {
         actualMode = g_DllErrorMode;
     } else {
         actualMode = (ErrorMode == 0) ? 0 : 1;
     }
 
-    
     if (VariableId == R0SIMULATE_VAR_DLL_ERROR_MODE) {
         if (Operation == R0SIMULATE_VAR_OP_SET) {
             g_DllErrorMode = (ULONG)Value;
@@ -557,7 +564,6 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
         }
     }
 
-    
     if (Operation != R0SIMULATE_VAR_OP_GET &&
         Operation != R0SIMULATE_VAR_OP_SET &&
         Operation != R0SIMULATE_VAR_OP_LIST) {
@@ -576,12 +582,11 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
         }
     }
 
-    
     memset(&in, 0, sizeof(in));
     in.Operation  = Operation;
     in.VariableId = VariableId;
     in.Value      = Value;
-    in.NameLength = 0;   
+    in.NameLength = 0;
 
     memset(&ioStatus, 0, sizeof(ioStatus));
 
@@ -676,9 +681,9 @@ R0SIMULATES_API BOOL R0SimulateGetKernelFunction(
 }
 
 R0SIMULATES_API BOOL R0SimulateIO(
-    ULONG Operation,
-    ULONG Port,
-    ULONG Value,
+    ULONG  Operation,
+    ULONG  Port,
+    ULONG  Value,
     PULONG pResult)
 {
     BOOL result = FALSE;

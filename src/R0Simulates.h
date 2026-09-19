@@ -2,13 +2,11 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
 #ifdef R0SIMULATES_EXPORTS
 #define R0SIMULATES_API __declspec(dllexport)
 #else
 #define R0SIMULATES_API __declspec(dllimport)
 #endif
-
 #include <windows.h>
 #include <winioctl.h>
 
@@ -41,16 +39,10 @@ extern "C" {
 #define R0SKMA_OP_READ     0
 #define R0SKMA_OP_WRITE    1
 
-// ----- R0SKOH Object Types -----
-#define R0SKOH_TYPE_SHIFT      28
-#define R0SKOH_TYPE_MASK       0xF0000000UL
-#define R0SKOH_ATTR_MASK       0x0FFFFFFFUL
-#define R0SKOH_TYPE_GET(f)     (((f) & R0SKOH_TYPE_MASK) >> R0SKOH_TYPE_SHIFT)
-#define R0SKOH_ATTR_GET(f)     ((f) & R0SKOH_ATTR_MASK)
-#define R0SKOH_MAKE_FLAGS(t,a) ((((ULONG)(t)) << R0SKOH_TYPE_SHIFT) | ((a) & R0SKOH_ATTR_MASK))
-
-#define R0SKOH_TYPE_POINTER    0
-#define R0SKOH_TYPE_PID        2
+// ----- R0SKOH -----
+#define R0SKOH_TYPE_HANDLE   0
+#define R0SKOH_TYPE_POINTER  1
+#define R0SKOH_TYPE_PID      2
 
 // ----- Internal Variables Operation -----
 #define R0SIMULATE_VAR_OP_GET   0x01
@@ -115,15 +107,22 @@ typedef struct _PREVIOUS_MODE_SWITCH_OUTPUT {
 } PREVIOUS_MODE_SWITCH_OUTPUT, *PPREVIOUS_MODE_SWITCH_OUTPUT;
 
 typedef struct _KERNEL_OPEN_HANDLE_INPUT {
-    ULONG       Flags;
+    ULONG       Type;
+    ULONG       Reserved0;
     ACCESS_MASK DesiredAccess;
     UINT64      Target;
+    ULONG       AccessMode;
+    ULONG       HandleAttributes;
+    UINT64      ObjectType;
 } KERNEL_OPEN_HANDLE_INPUT, *PKERNEL_OPEN_HANDLE_INPUT;
 
 typedef struct _KERNEL_OPEN_HANDLE_OUTPUT {
     HANDLE      ResultHandle;
     ACCESS_MASK ActualGrantedAccess;
     NTSTATUS    Status;
+    PVOID       KernelPointer;
+    ULONG       Type;
+    ULONG       Reserved;
 } KERNEL_OPEN_HANDLE_OUTPUT, *PKERNEL_OPEN_HANDLE_OUTPUT;
 
 typedef struct _KERNEL_MEMORY_ACCESS_INPUT {
@@ -187,40 +186,37 @@ typedef struct _R0S_IO_OUTPUT {
     ULONG   Status;
 } R0S_IO_OUTPUT, *PR0S_IO_OUTPUT;
 
-// [1] IOCTL_R0SIMULATE_EXEC_INSTRUCTION
 R0SIMULATES_API UINT64 R0SimulateISA(
     const void* pInstruction,
     ULONG       instructionSize);
 
-// [2] IOCTL_R0SIMULATE_CALL_KERNEL_API
 R0SIMULATES_API UINT64 R0SimulateAPI(
     const WCHAR* pwszApiName,
     ULONG        argc,
     ULONG        flags,
     ...);
 
-// [3] IOCTL_R0SIMULATE_KERNEL_PROCESS_HIDING
 R0SIMULATES_API BOOL R0SimulateKernelProcessHiding(
     UCHAR operation,
     ULONG pid,
     PVOID pOutBuffer,
     ULONG outSize);
 
-// [4] IOCTL_R0SIMULATE_PREVIOUS_MODE_SWITCH
 R0SIMULATES_API BOOL R0SimulatePreviousModeSwitch(
     BOOL  viewOnly,
     UCHAR mode,
     UCHAR* pOldMode,
     UCHAR* pNewMode);
 
-// [5] IOCTL_R0SIMULATE_KERNEL_OPEN_HANDLE
-R0SIMULATES_API HANDLE R0SimulateKernelOpenHandle(
+R0SIMULATES_API BOOL R0SimulateKernelOpenHandle(
     ULONG       Type,
     ACCESS_MASK DesiredAccess,
     UINT64      Target,
-    ULONG       Attributes);
+    ULONG       AccessMode,
+    ULONG       HandleAttributes,
+    UINT64      ObjectType,
+    PKERNEL_OPEN_HANDLE_OUTPUT pOut);
 
-// [6] IOCTL_R0SIMULATE_KERNEL_MEMORY_ACCESS
 R0SIMULATES_API BOOL R0SimulateKernelMemoryAccess(
     UINT64 Address,
     ULONG  Offset,
@@ -228,11 +224,9 @@ R0SIMULATES_API BOOL R0SimulateKernelMemoryAccess(
     UCHAR  Operation,
     PVOID  Buffer);
 
-// [7] IOCTL_R0SIMULATE_GET_SYSTEM_TOKEN
 R0SIMULATES_API HANDLE R0SimulateGetSystemToken(
     BOOL ReplaceToken);
 
-// [8] IOCTL_R0SIMULATE_SET_INTERNAL_VARS
 R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
     ULONG  Operation,
     ULONG  VariableId,
@@ -242,14 +236,12 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
     PULONG pInfoCount,
     ULONG  ErrorMode);
 
-// [9] IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION
 R0SIMULATES_API BOOL R0SimulateGetKernelFunction(
     const WCHAR* FunctionName,
     PVOID pOutBuffer,
     ULONG outSize,
     PULONG pInfoCount);
 
-// [10] IOCTL_R0SIMULATE_IO
 R0SIMULATES_API BOOL R0SimulateIO(
     ULONG  Operation,
     ULONG  Port,
