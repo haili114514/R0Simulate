@@ -6,6 +6,22 @@
 #include <securitybaseapi.h>
 #include "R0Simulates.h"
 
+#ifndef OBJ_KERNEL_HANDLE
+#define OBJ_KERNEL_HANDLE        0x00000200L
+#endif
+#ifndef OBJ_FORCE_ACCESS_CHECK
+#define OBJ_FORCE_ACCESS_CHECK   0x00000400L
+#endif
+#ifndef OBJ_INHERIT
+#define OBJ_INHERIT              0x00000002L
+#endif
+#ifndef OBJ_CASE_INSENSITIVE
+#define OBJ_CASE_INSENSITIVE     0x00000040L
+#endif
+
+#define R0SKOH_ACCESS_MODE_USER         1
+#define R0SKOH_ACCESS_MODE_KERNEL       0
+
 static void print_last_error(const char* msg)
 {
     DWORD err = GetLastError();
@@ -65,9 +81,6 @@ int main(void)
     printf("Driver: R0Simulate.sys, Test Signing ON\n");
     printf("DLL:    R0Simulates.dll (1 function <-> 1 IOCTL)\n\n");
 
-    
-    
-    
     printf("[1] IOCTL_R0SIMULATE_SET_INTERNAL_VARS  (R0S SIV)\n");
     {
         UCHAR listBuffer[16384] = {0};
@@ -470,47 +483,113 @@ kma_done:
         printf("\n");
     }
 
-    printf("[10] IOCTL_R0SIMULATE_KERNEL_OPEN_HANDLE  (R0S KOH)\n");
+    printf("[10] IOCTL_R0SIMULATE_KERNEL_OPEN_HANDLE (R0S KOH) - handle/pointer conversion (unsafe demo)\n");
     {
         ULONG pid = GetCurrentProcessId();
+        KERNEL_OPEN_HANDLE_OUTPUT out = {0};
+        KERNEL_OPEN_HANDLE_OUTPUT out2 = {0};
+        HANDLE hProcess = NULL;
+        BOOL ok;
 
-        printf("  [10.1] Open handle to current process (PID=%lu)\n", pid);
+        printf("  [10.1] Open handle to current process by PID (PID=%lu)\n", pid);
+        ok = R0SimulateKernelOpenHandle(
+            R0SKOH_TYPE_PID,
+            PROCESS_ALL_ACCESS,
+            (UINT64)pid,
+            R0SKOH_ACCESS_MODE_KERNEL,
+            OBJ_KERNEL_HANDLE,
+            0,
+            &out
+        );
+        if (ok && NT_SUCCESS(out.Status) && out.ResultHandle != NULL)
         {
-            HANDLE hProcess = R0SimulateKernelOpenHandle(
-                R0SKOH_TYPE_PID,
-                PROCESS_ALL_ACCESS,
-                (UINT64)pid,
-                0);
-            if (hProcess != NULL)
-            {
-                printf("      OK: got handle = %p\n", hProcess);
-                CloseHandle(hProcess);
-                printf("      Handle closed\n");
-            }
-            else
-            {
-                print_last_error("R0S KOH open current process");
-            }
+            printf("      OK: got handle = %p\n", out.ResultHandle);
+            CloseHandle(out.ResultHandle);
+            printf("      Handle closed\n");
+        }
+        else
+        {
+            print_last_error("R0S KOH open current process by PID");
         }
 
         printf("  [10.2] Open handle to system process (PID=4)\n");
+        ok = R0SimulateKernelOpenHandle(
+            R0SKOH_TYPE_PID,
+            PROCESS_QUERY_INFORMATION,
+            (UINT64)4,
+            R0SKOH_ACCESS_MODE_KERNEL,
+            OBJ_KERNEL_HANDLE,
+            0,
+            &out
+        );
+        if (ok && NT_SUCCESS(out.Status) && out.ResultHandle != NULL)
         {
-            HANDLE hProcess = R0SimulateKernelOpenHandle(
-                R0SKOH_TYPE_PID,
-                PROCESS_QUERY_INFORMATION,
-                (UINT64)4,
-                0);
-            if (hProcess != NULL)
+            printf("      OK: got handle = %p\n", out.ResultHandle);
+            CloseHandle(out.ResultHandle);
+            printf("      Handle closed\n");
+        }
+        else
+        {
+            print_last_error("R0S KOH open system process");
+        }
+
+        printf("  [10.3] Open a real handle to the current process with OpenProcess\n");
+        hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pid);
+        if (hProcess == NULL)
+        {
+            print_last_error("OpenProcess");
+            goto test10_end;
+        }
+        printf("      OK: hProcess = %p\n", hProcess);
+
+        printf("  [10.4] Convert handle to kernel pointer (Type=R0SKOH_TYPE_HANDLE)\n");
+        ok = R0SimulateKernelOpenHandle(
+            R0SKOH_TYPE_HANDLE,
+            PROCESS_QUERY_INFORMATION,
+            (UINT64)(ULONG_PTR)hProcess,
+            R0SKOH_ACCESS_MODE_USER,
+            0,
+            0,
+            &out
+        );
+        if (!ok || !NT_SUCCESS(out.Status))
+        {
+            print_last_error("R0S KOH handle to pointer");
+            goto test10_end;
+        }
+
+        printf("      OK: KernelPointer = 0x%p\n", out.KernelPointer);
+        printf("      Warning: this pointer was dereferenced in kernel and is now dangling.\n");
+
+        printf("  [10.5] Convert kernel pointer back to handle (Type=R0SKOH_TYPE_POINTER)\n");
+        printf("      Warning: unsafe operation, may cause a bugcheck. Demo only.\n");
+        ok = R0SimulateKernelOpenHandle(
+            R0SKOH_TYPE_POINTER,
+            PROCESS_QUERY_INFORMATION,
+            (UINT64)(ULONG_PTR)out.KernelPointer,
+            R0SKOH_ACCESS_MODE_KERNEL,
+            OBJ_KERNEL_HANDLE,
+            0,
+            &out2
+        );
+        if (ok && NT_SUCCESS(out2.Status))
+        {
+            printf("      OK: ResultHandle = 0x%p\n", out2.ResultHandle);
+            if (out2.ResultHandle != NULL && out2.ResultHandle != INVALID_HANDLE_VALUE)
             {
-                printf("      OK: got handle = %p\n", hProcess);
-                CloseHandle(hProcess);
+                CloseHandle(out2.ResultHandle);
                 printf("      Handle closed\n");
             }
-            else
-            {
-                print_last_error("R0S KOH open system process");
-            }
         }
+        else
+        {
+            printf("      Failed: Status = 0x%08X\n", out2.Status);
+            print_last_error("R0S KOH pointer to handle");
+        }
+
+test10_end:
+        if (hProcess != NULL)
+            CloseHandle(hProcess);
         printf("\n");
     }
 
