@@ -340,6 +340,34 @@ typedef UINT64 (NTAPI *PFN_14)(UINT64, UINT64, UINT64, UINT64, UINT64, UINT64, U
 typedef UINT64 (NTAPI *PFN_15)(UINT64, UINT64, UINT64, UINT64, UINT64, UINT64, UINT64, UINT64, UINT64, UINT64, UINT64, UINT64, UINT64, UINT64, UINT64);
 typedef UINT64 (NTAPI *PFN_16)(UINT64, UINT64, UINT64, UINT64, UINT64, UINT64, UINT64, UINT64, UINT64, UINT64, UINT64, UINT64, UINT64, UINT64, UINT64, UINT64);
 
+static BOOLEAN FindPatternOffset(
+    PVOID FunctionBase,
+    ULONG MaxScanSize,
+    const UCHAR* Pattern,
+    ULONG PatternSize,
+    PULONG OutOffset)
+{
+    PUCHAR start = (PUCHAR)FunctionBase;
+    ULONG i;
+    BOOLEAN found = FALSE;
+
+    __try {
+        for (i = 0; i < MaxScanSize - PatternSize; i++) {
+            if (RtlCompareMemory(start + i, Pattern, PatternSize) == PatternSize) {
+                ULONG offset = 0;
+                if (SafeReadMemory(start + i + PatternSize, &offset, sizeof(offset))) {
+                    *OutOffset = offset;
+                    found = TRUE;
+                    break;
+                }
+            }
+        }
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        found = FALSE;
+    }
+    return found;
+}
+
 static BOOLEAN R0sWcsEqI(const WCHAR* a, const WCHAR* b)
 {
     BOOLEAN result = FALSE;
@@ -982,26 +1010,34 @@ NTSTATUS InitDynamicOffsets(VOID)
         UNICODE_STRING us;
         PVOID pExGetPrevMode;
         PVOID pPsGetPid;
-        UCHAR* pCode;
-        USHORT offset;
+        ULONG offset;
         PEPROCESS pSystem = PsInitialSystemProcess;
 
-        RtlInitUnicodeString(&us, L"ExGetPreviousMode");
-        pExGetPrevMode = MmGetSystemRoutineAddress(&us);
-        if (!pExGetPrevMode) { status = STATUS_NOT_FOUND; __leave; }
-        pCode = (UCHAR*)pExGetPrevMode;
-        __try { g_PreviousModeOffset = *(USHORT*)(pCode + 0x0C); }
-        __except(EXCEPTION_EXECUTE_HANDLER) { status = GetExceptionCode(); __leave; }
-
+        
         RtlInitUnicodeString(&us, L"PsGetProcessId");
         pPsGetPid = MmGetSystemRoutineAddress(&us);
         if (!pPsGetPid) { status = STATUS_NOT_FOUND; __leave; }
-        pCode = (UCHAR*)pPsGetPid;
-        __try {
-            offset = *(USHORT*)(pCode + 0x03);
-            g_ActiveProcessLinksOffset = offset + 0x08;
-        } __except(EXCEPTION_EXECUTE_HANDLER) { status = GetExceptionCode(); __leave; }
 
+        UCHAR patternPsGetPid[] = {0x48, 0x8B, 0x81};
+        if (!FindPatternOffset(pPsGetPid, 0x200, patternPsGetPid, sizeof(patternPsGetPid), &offset)) {
+            status = STATUS_NOT_FOUND;
+            __leave;
+        }
+        g_ActiveProcessLinksOffset = offset + 0x08; 
+
+        
+        RtlInitUnicodeString(&us, L"ExGetPreviousMode");
+        pExGetPrevMode = MmGetSystemRoutineAddress(&us);
+        if (!pExGetPrevMode) { status = STATUS_NOT_FOUND; __leave; }
+
+        UCHAR patternExGetPrevMode[] = {0x0F, 0xB6, 0x80};
+        if (!FindPatternOffset(pExGetPrevMode, 0x200, patternExGetPrevMode, sizeof(patternExGetPrevMode), &offset)) {
+            status = STATUS_NOT_FOUND;
+            __leave;
+        }
+        g_PreviousModeOffset = offset;
+
+        
         if (pSystem) {
             UCHAR* base = (UCHAR*)pSystem;
             ULONG i;
@@ -1015,6 +1051,7 @@ NTSTATUS InitDynamicOffsets(VOID)
             } __except(EXCEPTION_EXECUTE_HANDLER) { status = GetExceptionCode(); __leave; }
         }
         if (g_PrimaryTokenFrozenOffset == 0) { status = STATUS_NOT_FOUND; __leave; }
+
         status = STATUS_SUCCESS;
     } __except(EXCEPTION_EXECUTE_HANDLER) {
         status = GetExceptionCode();
