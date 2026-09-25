@@ -2,11 +2,13 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
 #ifdef R0SIMULATES_EXPORTS
 #define R0SIMULATES_API __declspec(dllexport)
 #else
 #define R0SIMULATES_API __declspec(dllimport)
 #endif
+
 #include <windows.h>
 #include <winioctl.h>
 
@@ -21,6 +23,17 @@ extern "C" {
 #define IOCTL_R0SIMULATE_SET_INTERNAL_VARS          CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_IO                         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x809, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define IOCTL_INDEX_EXEC_INSTRUCTION      0
+#define IOCTL_INDEX_CALL_KERNEL_API       1
+#define IOCTL_INDEX_PROCESS_HIDING        2
+#define IOCTL_INDEX_PREVIOUS_MODE_SWITCH  3
+#define IOCTL_INDEX_KERNEL_OPEN_HANDLE    4
+#define IOCTL_INDEX_KERNEL_MEMORY_ACCESS  5
+#define IOCTL_INDEX_GET_SYSTEM_TOKEN      6
+#define IOCTL_INDEX_SET_INTERNAL_VARS     7
+#define IOCTL_INDEX_GET_KERNEL_FUNCTION   8
+#define IOCTL_INDEX_IO                    9
 
 // ----- Flags -----
 #define R0SIMULATE_FLAG_USE_ADDRESS  0x00000001
@@ -43,6 +56,10 @@ extern "C" {
 #define R0SKOH_TYPE_HANDLE   0
 #define R0SKOH_TYPE_POINTER  1
 #define R0SKOH_TYPE_PID      2
+
+// ----- R0SKOH Access Mode -----
+#define R0SKOH_ACCESS_MODE_KERNEL   0
+#define R0SKOH_ACCESS_MODE_USER     1
 
 // ----- Internal Variables Operation -----
 #define R0SIMULATE_VAR_OP_GET   0x01
@@ -93,6 +110,11 @@ typedef struct _PROCESS_HIDING_INPUT {
     UCHAR   Operation;
     UCHAR   Reserved[3];
 } PROCESS_HIDING_INPUT, *PPROCESS_HIDING_INPUT;
+
+typedef struct _PROCESS_HIDING_LIST_OUTPUT {
+    ULONG   Count;
+    HANDLE  Pids[1];
+} PROCESS_HIDING_LIST_OUTPUT, *PPROCESS_HIDING_LIST_OUTPUT;
 
 typedef struct _PREVIOUS_MODE_SWITCH_INPUT {
     UCHAR   Mode;
@@ -175,6 +197,8 @@ typedef struct _SSDT_FUNC_ENTRY {
     WCHAR   Name[64];
 } SSDT_FUNC_ENTRY, *PSSDT_FUNC_ENTRY;
 
+typedef SSDT_FUNC_ENTRY SSDT_ENTRY_INFO, *PSSDT_ENTRY_INFO;
+
 typedef struct _R0S_IO_INPUT {
     ULONG   Operation;
     ULONG   Port;
@@ -186,6 +210,7 @@ typedef struct _R0S_IO_OUTPUT {
     ULONG   Status;
 } R0S_IO_OUTPUT, *PR0S_IO_OUTPUT;
 
+// ----- Exported Functions -----
 R0SIMULATES_API UINT64 R0SimulateISA(
     const void* pInstruction,
     ULONG       instructionSize);
