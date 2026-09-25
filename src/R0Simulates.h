@@ -87,8 +87,8 @@ typedef struct _EXEC_INSTRUCTION_INPUT {
 } EXEC_INSTRUCTION_INPUT, *PEXEC_INSTRUCTION_INPUT;
 
 typedef struct _EXEC_INSTRUCTION_OUTPUT {
-    UINT64  ReturnValue;
-    ULONG   Status;
+    UINT64   ReturnValue;
+    NTSTATUS Status;
 } EXEC_INSTRUCTION_OUTPUT, *PEXEC_INSTRUCTION_OUTPUT;
 
 typedef struct _CALL_KERNEL_API_INPUT {
@@ -100,8 +100,8 @@ typedef struct _CALL_KERNEL_API_INPUT {
 } CALL_KERNEL_API_INPUT, *PCALL_KERNEL_API_INPUT;
 
 typedef struct _CALL_KERNEL_API_OUTPUT {
-    UINT64  ReturnValue;
-    ULONG   Status;
+    UINT64   ReturnValue;
+    NTSTATUS Status;
 } CALL_KERNEL_API_OUTPUT, *PCALL_KERNEL_API_OUTPUT;
 
 typedef struct _PROCESS_HIDING_INPUT {
@@ -123,9 +123,9 @@ typedef struct _PREVIOUS_MODE_SWITCH_INPUT {
 } PREVIOUS_MODE_SWITCH_INPUT, *PPREVIOUS_MODE_SWITCH_INPUT;
 
 typedef struct _PREVIOUS_MODE_SWITCH_OUTPUT {
-    ULONG   Status;
-    UCHAR   OldMode;
-    UCHAR   NewMode;
+    NTSTATUS Status;
+    UCHAR    OldMode;
+    UCHAR    NewMode;
 } PREVIOUS_MODE_SWITCH_OUTPUT, *PPREVIOUS_MODE_SWITCH_OUTPUT;
 
 typedef struct _KERNEL_OPEN_HANDLE_INPUT {
@@ -162,8 +162,8 @@ typedef struct _GET_SYSTEM_TOKEN_INPUT {
 } GET_SYSTEM_TOKEN_INPUT, *PGET_SYSTEM_TOKEN_INPUT;
 
 typedef struct _GET_SYSTEM_TOKEN_OUTPUT {
-    ULONG   Status;
-    HANDLE  TokenHandle;
+    NTSTATUS Status;
+    HANDLE   TokenHandle;
 } GET_SYSTEM_TOKEN_OUTPUT, *PGET_SYSTEM_TOKEN_OUTPUT;
 
 typedef struct _SET_INTERNAL_VAR_INPUT {
@@ -206,8 +206,8 @@ typedef struct _R0S_IO_INPUT {
 } R0S_IO_INPUT, *PR0S_IO_INPUT;
 
 typedef struct _R0S_IO_OUTPUT {
-    ULONG   Value;
-    ULONG   Status;
+    ULONG    Value;
+    NTSTATUS Status;
 } R0S_IO_OUTPUT, *PR0S_IO_OUTPUT;
 
 // ----- Exported Functions -----
@@ -228,8 +228,8 @@ R0SIMULATES_API BOOL R0SimulateKernelProcessHiding(
     ULONG outSize);
 
 R0SIMULATES_API BOOL R0SimulatePreviousModeSwitch(
-    BOOL  viewOnly,
-    UCHAR mode,
+    BOOL   viewOnly,
+    UCHAR  mode,
     UCHAR* pOldMode,
     UCHAR* pNewMode);
 
