@@ -272,14 +272,6 @@ int main(int argc, char* argv[]) {
         }
 
         UINT64 value = ParseValue(argv[3]);
-
-        if (id == 4 && value > 2) {
-            fprintf(stderr, "Warning: g_FunctionLookupMode accepts only 0, 1, 2.\n");
-        }
-        if (id == R0SIMULATE_VAR_DLL_ERROR_MODE && value > 1) {
-            fprintf(stderr, "Warning: DLL_ErrorMode accepts only 0, 1.\n");
-        }
-
         result = R0SimulateSetInternalVariables(
             R0SIMULATE_VAR_OP_SET,
             id,
