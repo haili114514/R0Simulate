@@ -524,7 +524,7 @@ R0SIMULATES_API HANDLE R0SimulateGetSystemToken(BOOL ReplaceToken) {
 
 R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
     ULONG  Operation,
-    ULONG  VariableId,
+    UINT64 VariableId,
     UINT64 Value,
     PVOID  pOutBuffer,
     ULONG  outSize,
@@ -536,6 +536,9 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
     SET_INTERNAL_VAR_INPUT in;
     IO_STATUS_BLOCK ioStatus;
     NTSTATUS status;
+    BOOLEAN useName = FALSE;
+    const WCHAR* pName = NULL;
+    ULONG nameLen = 0;
 
     if (!R0Sim_OpenDriver()) return FALSE;
 
@@ -545,22 +548,36 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
         actualMode = (ErrorMode == 0) ? 0 : 1;
     }
 
-    if (VariableId == R0SIMULATE_VAR_DLL_ERROR_MODE) {
-        if (Operation == R0SIMULATE_VAR_OP_SET) {
-            g_DllErrorMode = (ULONG)Value;
-            RtlSetLastWin32Error(ERROR_SUCCESS);
-            return TRUE;
-        } else if (Operation == R0SIMULATE_VAR_OP_GET) {
-            if (!pOutBuffer || outSize < sizeof(UINT64)) {
+    if (VariableId & R0SIMULATE_VAR_NAME_FLAG) {
+        useName = TRUE;
+        pName = (const WCHAR*)(ULONG_PTR)(VariableId & R0SIMULATE_VAR_ID_MASK);
+        if (pName == NULL) {
+            RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        nameLen = (ULONG)((my_wcslen(pName) + 1) * sizeof(WCHAR));
+        if (nameLen == 0 || nameLen > 512) {
+            RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+    } else {
+        if ((ULONG)VariableId == R0SIMULATE_VAR_DLL_ERROR_MODE) {
+            if (Operation == R0SIMULATE_VAR_OP_SET) {
+                g_DllErrorMode = (ULONG)Value;
+                RtlSetLastWin32Error(ERROR_SUCCESS);
+                return TRUE;
+            } else if (Operation == R0SIMULATE_VAR_OP_GET) {
+                if (!pOutBuffer || outSize < sizeof(UINT64)) {
+                    RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+                    return FALSE;
+                }
+                *(UINT64*)pOutBuffer = g_DllErrorMode;
+                RtlSetLastWin32Error(ERROR_SUCCESS);
+                return TRUE;
+            } else {
                 RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
                 return FALSE;
             }
-            *(UINT64*)pOutBuffer = g_DllErrorMode;
-            RtlSetLastWin32Error(ERROR_SUCCESS);
-            return TRUE;
-        } else {
-            RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
-            return FALSE;
         }
     }
 
@@ -582,20 +599,43 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
         }
     }
 
-    memset(&in, 0, sizeof(in));
-    in.Operation  = Operation;
-    in.VariableId = VariableId;
-    in.Value      = Value;
-    in.NameLength = 0;
+    if (useName) {
+        SIZE_T totalInSize = sizeof(SET_INTERNAL_VAR_INPUT) + nameLen;
+        PUCHAR pInBuf = (PUCHAR)RtlAllocateHeap(R0_HEAP, HEAP_ZERO_MEMORY, totalInSize);
+        if (!pInBuf) {
+            RtlSetLastWin32Error(ERROR_OUTOFMEMORY);
+            return FALSE;
+        }
+        PSET_INTERNAL_VAR_INPUT pIn = (PSET_INTERNAL_VAR_INPUT)pInBuf;
+        pIn->Operation  = Operation;
+        pIn->VariableId = 0;
+        pIn->Value      = Value;
+        pIn->NameLength = nameLen;
+        memcpy(pInBuf + sizeof(SET_INTERNAL_VAR_INPUT), pName, nameLen);
 
-    memset(&ioStatus, 0, sizeof(ioStatus));
+        memset(&ioStatus, 0, sizeof(ioStatus));
+        status = NtDeviceIoControlFile(
+            g_hDriver, NULL, NULL, NULL, &ioStatus,
+            IOCTL_R0SIMULATE_SET_INTERNAL_VARS,
+            pInBuf, (ULONG)totalInSize,
+            pOutBuffer, outSize
+        );
+        RtlFreeHeap(R0_HEAP, 0, pInBuf);
+    } else {
+        memset(&in, 0, sizeof(in));
+        in.Operation  = Operation;
+        in.VariableId = (ULONG)VariableId;
+        in.Value      = Value;
+        in.NameLength = 0;
 
-    status = NtDeviceIoControlFile(
-        g_hDriver, NULL, NULL, NULL, &ioStatus,
-        IOCTL_R0SIMULATE_SET_INTERNAL_VARS,
-        &in, sizeof(in),
-        pOutBuffer, outSize
-    );
+        memset(&ioStatus, 0, sizeof(ioStatus));
+        status = NtDeviceIoControlFile(
+            g_hDriver, NULL, NULL, NULL, &ioStatus,
+            IOCTL_R0SIMULATE_SET_INTERNAL_VARS,
+            &in, sizeof(in),
+            pOutBuffer, outSize
+        );
+    }
 
     if (!NT_SUCCESS(status)) {
         SetLastErrorByMode(actualMode, status);
