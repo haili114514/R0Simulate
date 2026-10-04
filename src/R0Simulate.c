@@ -359,6 +359,26 @@ typedef struct _R0S_CALL_DRIVER_OUTPUT {
     UCHAR    Data[1];
 } R0S_CALL_DRIVER_OUTPUT, *PR0S_CALL_DRIVER_OUTPUT;
 
+typedef struct _WIN32K_SSDT_ENTRY {
+    LIST_ENTRY ListEntry;
+    ULONG      Ssn;
+    ULONG      GlobalSsn;
+    UINT64     Address;
+    WCHAR      Name[64];
+} WIN32K_SSDT_ENTRY, *PWIN32K_SSDT_ENTRY;
+
+typedef struct _WIN32K_SSDT_ENTRY_INFO {
+    ULONG   Ssn;
+    ULONG   GlobalSsn;
+    UINT64  Address;
+    WCHAR   Name[64];
+} WIN32K_SSDT_ENTRY_INFO, *PWIN32K_SSDT_ENTRY_INFO;
+
+typedef struct _WIN32U_MAP {
+    ULONG  Index;
+    WCHAR  Name[64];
+} WIN32U_MAP, *PWIN32U_MAP;
+
 PDEVICE_OBJECT  g_DeviceObject = NULL;
 UNICODE_STRING  g_SymLinkName;
 PDRIVER_OBJECT  g_DriverObject = NULL;
@@ -397,9 +417,13 @@ static ULONG        g_AuthMode = 0;
 static LIST_ENTRY   g_AuthListHead;
 static KSPIN_LOCK   g_AuthListLock;
 static ULONG g_VersionMajor    = 2;
-static ULONG g_VersionMinor    = 0;
+static ULONG g_VersionMinor    = 1;
 static ULONG g_VersionBuild    = 0;
 static ULONG g_VersionRevision = 0;
+static LIST_ENTRY   g_Win32kSsdtListHead;
+static KSPIN_LOCK   g_Win32kSsdtListLock;
+static BOOLEAN      g_Win32kSsdtBuilt = FALSE;
+static ULONG        g_SsnTableSelect  = 0;
 
 NTKERNELAPI PPEB PsGetProcessPeb(PEPROCESS Process);
 NTKERNELAPI NTSTATUS ZwOpenProcessToken(HANDLE ProcessHandle, ACCESS_MASK DesiredAccess, PHANDLE TokenHandle);
@@ -445,6 +469,13 @@ NAME_MAP* ParseNtdllExports(PVOID, PULONG);
 BOOLEAN SafeReadMemory(PVOID, PVOID, SIZE_T);
 BOOLEAN HasTcbPrivilege(VOID);
 VOID    UpdateAntiKill(VOID);
+
+NTSTATUS BuildWin32kSsdtTable(VOID);
+PWIN32K_SSDT_ENTRY FindWin32kSsdtBySsn(ULONG ssn);
+PWIN32K_SSDT_ENTRY FindWin32kSsdtByName(const WCHAR* name);
+static PVOID   GetModuleBaseByName(PEPROCESS Process, const WCHAR* targetName);
+static PWIN32U_MAP ParseWin32uExports(PVOID base, PULONG pCount);
+static UINT64  FindKeServiceDescriptorTableByOp(UINT64 start, SIZE_T range, UCHAR op2);
 
 static NTSTATUS         R0sRegisterVariable(ULONG, PVOID, const WCHAR*, ULONG*);
 static PVAR_TABLE_ENTRY FindVarById(ULONG);
@@ -781,11 +812,16 @@ static VOID RegisterAllVariables(VOID)
         R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_IoctlHandler[i], name, NULL);
     }
 
-    
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_AuthMode, L"g_AuthMode", NULL);
     R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_AuthListHead.Flink, L"g_AuthListHead.Flink", NULL);
     R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_AuthListHead.Blink, L"g_AuthListHead.Blink", NULL);
     R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_AuthListLock,       L"g_AuthListLock",       NULL);
+
+    R0sRegisterVariable(sizeof(ULONG),   (PVOID)(ULONG_PTR)&g_SsnTableSelect,           L"g_SsnTableSelect",           NULL);
+    R0sRegisterVariable(sizeof(PVOID),   (PVOID)(ULONG_PTR)&g_Win32kSsdtListHead.Flink, L"g_Win32kSsdtListHead.Flink", NULL);
+    R0sRegisterVariable(sizeof(PVOID),   (PVOID)(ULONG_PTR)&g_Win32kSsdtListHead.Blink, L"g_Win32kSsdtListHead.Blink", NULL);
+    R0sRegisterVariable(sizeof(PVOID),   (PVOID)(ULONG_PTR)&g_Win32kSsdtListLock,       L"g_Win32kSsdtListLock",       NULL);
+    R0sRegisterVariable(sizeof(BOOLEAN), (PVOID)(ULONG_PTR)&g_Win32kSsdtBuilt,          L"g_Win32kSsdtBuilt",          NULL);
 }
 
 static BOOLEAN R0sIsCallerAuthorized(VOID)
@@ -1170,7 +1206,7 @@ NTSTATUS BuildSsdtTable(VOID)
 
         kiAddr = ReadMsr(0xC0000082);
         if (!kiAddr) { status = STATUS_UNSUCCESSFUL; __leave; }
-        sdtPtr = FindKeServiceDescriptorTable(kiAddr - 0x1000, 0x2000);
+        sdtPtr = FindKeServiceDescriptorTable(kiAddr, 0x3000);
         if (!sdtPtr) { status = STATUS_NOT_FOUND; __leave; }
 
         for (baseOff = 0; baseOff <= 0x18; baseOff += 8) {
@@ -1283,6 +1319,304 @@ PSSDT_ENTRY FindSsdtByName(const WCHAR* name)
         found = NULL;
     }
     KeReleaseSpinLock(&g_SsdtListLock, oldIrql);
+    return found;
+}
+
+static UINT64 FindKeServiceDescriptorTableByOp(UINT64 start, SIZE_T range, UCHAR op2)
+{
+    UINT64 found = 0;
+    __try {
+        UINT64 end = start + range;
+        UINT64 addr;
+        for (addr = start; addr + 7 < end; addr++) {
+            UCHAR buf[7];
+            if (!SafeReadMemory((PVOID)(ULONG_PTR)addr, buf, sizeof(buf))) continue;
+            if (buf[0] == 0x4C && buf[1] == 0x8D && buf[2] == op2) {
+                ULONG offset = *(ULONG*)(buf + 3);
+                UINT64 target = addr + 7 + (INT64)(INT32)offset;
+                UCHAR test;
+                if (SafeReadMemory((PVOID)(ULONG_PTR)target, &test, 1)) {
+                    found = target;
+                    break;
+                }
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        found = 0;
+    }
+    return found;
+}
+
+static PVOID GetModuleBaseByName(PEPROCESS Process, const WCHAR* targetName)
+{
+    PVOID base = NULL;
+    KAPC_STATE apc;
+    BOOLEAN attached = FALSE;
+
+    if (Process == NULL || targetName == NULL) return NULL;
+
+    __try { KeStackAttachProcess((PRKPROCESS)Process, &apc); attached = TRUE; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { attached = FALSE; }
+    if (!attached) return NULL;
+
+    __try {
+        PPEB peb = PsGetProcessPeb(Process);
+        if (peb) {
+            PVOID ldrPtr = NULL;
+            __try { ldrPtr = *(PVOID*)((PUCHAR)peb + 0x18); }
+            __except(EXCEPTION_EXECUTE_HANDLER) { ldrPtr = NULL; }
+
+            if (ldrPtr) {
+                PEB_LDR_DATA ldr;
+                if (SafeReadMemory(ldrPtr, &ldr, sizeof(ldr)) && ldr.InMemoryOrderModuleList.Flink) {
+                    PLIST_ENTRY head  = (PLIST_ENTRY)&ldr.InMemoryOrderModuleList;
+                    PLIST_ENTRY entry = head->Flink;
+                    ULONG guard = 0;
+                    while (entry != head && guard++ < 512) {
+                        LDR_DATA_TABLE_ENTRY module;
+                        WCHAR nameBuf[64];
+                        if (!SafeReadMemory(
+                                CONTAINING_RECORD(entry, LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks),
+                                &module, sizeof(module))) break;
+
+                        if (module.BaseDllName.Buffer &&
+                            module.BaseDllName.Length < sizeof(nameBuf)) {
+                            if (SafeReadMemory(module.BaseDllName.Buffer, nameBuf,
+                                               module.BaseDllName.Length)) {
+                                nameBuf[module.BaseDllName.Length / sizeof(WCHAR)] = 0;
+                                if (R0sWcsEqI(nameBuf, targetName)) {
+                                    base = module.DllBase;
+                                    break;
+                                }
+                            }
+                        }
+                        entry = entry->Flink;
+                    }
+                }
+            }
+        }
+    } __except(EXCEPTION_EXECUTE_HANDLER) { }
+
+    __try { KeUnstackDetachProcess(&apc); } __except(EXCEPTION_EXECUTE_HANDLER) { }
+    return base;
+}
+
+static PWIN32U_MAP ParseWin32uExports(PVOID base, PULONG pCount)
+{
+    PWIN32U_MAP map = NULL;
+    ULONG count = 0;
+    BOOLEAN ok = FALSE;
+
+    if (pCount) *pCount = 0;
+    if (!base) return NULL;
+
+    __try {
+        IMAGE_DOS_HEADER dos;
+        IMAGE_NT_HEADERS64 nt;
+        IMAGE_DATA_DIRECTORY expDir;
+        IMAGE_EXPORT_DIRECTORY exp;
+        ULONG e_lfanew;
+        ULONG* names;
+        int j;
+
+        if (!SafeReadMemory(base, &dos, sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE) __leave;
+        e_lfanew = dos.e_lfanew;
+        if (!SafeReadMemory((PUCHAR)base + e_lfanew, &nt, sizeof(nt)) ||
+            nt.Signature != IMAGE_NT_SIGNATURE) __leave;
+
+        expDir = nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+        if (!expDir.VirtualAddress || !expDir.Size) __leave;
+        if (!SafeReadMemory((PUCHAR)base + expDir.VirtualAddress, &exp, sizeof(exp))) __leave;
+
+        names = (ULONG*)((PUCHAR)base + exp.AddressOfNames);
+        map = (PWIN32U_MAP)ExAllocatePoolWithTag(
+            NonPagedPool, 4096 * sizeof(WIN32U_MAP), 'W32U');
+        if (!map) __leave;
+        RtlZeroMemory(map, 4096 * sizeof(WIN32U_MAP));
+
+        {
+            UCHAR* used = (UCHAR*)ExAllocatePoolWithTag(NonPagedPool, 4096, 'U32W');
+            if (!used) __leave;
+            RtlZeroMemory(used, 4096);
+
+            for (ULONG i = 0; i < exp.NumberOfNames; i++) {
+                ULONG nameRVA;
+                char  funcName[64] = {0};
+                USHORT ordinal;
+                ULONG funcRVA;
+                PVOID funcVA;
+                UCHAR code[8];
+                ULONG rawSsn = 0;
+                ULONG index;
+
+                if (!SafeReadMemory(&names[i], &nameRVA, sizeof(nameRVA))) break;
+                for (j = 0; j < 63; j++) {
+                    char ch;
+                    if (!SafeReadMemory((PUCHAR)base + nameRVA + j, &ch, 1)) break;
+                    if (ch == 0) { funcName[j] = 0; break; }
+                    funcName[j] = ch;
+                }
+                if (funcName[0] != 'N' || funcName[1] != 't') continue;
+
+                if (!SafeReadMemory((PUSHORT)((PUCHAR)base + exp.AddressOfNameOrdinals + i * 2),
+                                    &ordinal, sizeof(ordinal))) continue;
+                if (!SafeReadMemory((ULONG*)((PUCHAR)base + exp.AddressOfFunctions + ordinal * 4),
+                                    &funcRVA, sizeof(funcRVA))) continue;
+
+                funcVA = (PUCHAR)base + funcRVA;
+                if (!SafeReadMemory(funcVA, code, sizeof(code))) continue;
+
+                if (code[0] == 0xB8) {
+                    rawSsn = *(ULONG*)(code + 1);
+                } else if (code[0] == 0x4C && code[1] == 0x8B &&
+                           code[2] == 0xD1 && code[3] == 0xB8) {
+                    rawSsn = *(ULONG*)(code + 4);
+                } else {
+                    continue;
+                }
+
+                index = rawSsn & 0xFFF;
+                if (index >= 4096 || used[index]) continue;
+                used[index] = 1;
+                map[index].Index = index;
+                for (j = 0; j < 63 && funcName[j]; j++)
+                    map[index].Name[j] = (WCHAR)funcName[j];
+                count++;
+            }
+            ExFreePoolWithTag(used, 'U32W');
+        }
+        ok = TRUE;
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) { ok = FALSE; }
+
+    if (!ok) {
+        if (map) { ExFreePoolWithTag(map, 'W32U'); map = NULL; }
+        count = 0;
+    }
+    if (pCount) *pCount = count;
+    return map;
+}
+
+NTSTATUS BuildWin32kSsdtTable(VOID)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+
+    if (g_Win32kSsdtBuilt) return STATUS_SUCCESS;
+
+    __try {
+        UINT64 kiAddr = ReadMsr(0xC0000082);
+        UINT64 shadowSdt = 0, normalSdt = 0;
+        UINT64 win32kBase = 0;
+        ULONG  win32kCount = 0;
+        BOOLEAN got = FALSE;
+        PVOID  win32uBase = NULL;
+        ULONG  mapCount = 0;
+        PWIN32U_MAP nameMap = NULL;
+        ULONG  i;
+
+        if (!kiAddr) { status = STATUS_UNSUCCESSFUL; __leave; }
+
+        shadowSdt = FindKeServiceDescriptorTableByOp(kiAddr, 0x3000, 0x15);
+        normalSdt = FindKeServiceDescriptorTableByOp(kiAddr, 0x3000, 0x1D);
+        if (shadowSdt) {
+            UINT64 base; ULONG cnt;
+            if (SafeReadMemory((PVOID)(ULONG_PTR)(shadowSdt + 0x20), &base, 8) &&
+                SafeReadMemory((PVOID)(ULONG_PTR)(shadowSdt + 0x30), &cnt, 4) &&
+                base && cnt > 100 && cnt < 10000) {
+                win32kBase  = base;
+                win32kCount = cnt;
+                got = TRUE;
+            }
+        }
+        if (!got && normalSdt) {
+            UINT64 base; ULONG cnt;
+            if (SafeReadMemory((PVOID)(ULONG_PTR)(normalSdt + 0x20), &base, 8) &&
+                SafeReadMemory((PVOID)(ULONG_PTR)(normalSdt + 0x30), &cnt, 4) &&
+                base && cnt > 100 && cnt < 10000) {
+                win32kBase  = base;
+                win32kCount = cnt;
+                got = TRUE;
+            }
+        }
+        if (!got) { status = STATUS_NOT_FOUND; __leave; }
+
+        win32uBase = GetModuleBaseByName(PsGetCurrentProcess(), L"win32u.dll");
+        if (win32uBase) nameMap = ParseWin32uExports(win32uBase, &mapCount);
+
+        for (i = 0; i < win32kCount; i++) {
+            ULONG entry;
+            UINT64 entryAddr = win32kBase + (UINT64)i * 4;
+            UINT64 funcAddr;
+            PWIN32K_SSDT_ENTRY pNode;
+            KIRQL oldIrql;
+
+            if (!SafeReadMemory((PVOID)(ULONG_PTR)entryAddr, &entry, sizeof(entry))) continue;
+            funcAddr = win32kBase + (INT64)((INT32)entry >> 4);
+
+            pNode = (PWIN32K_SSDT_ENTRY)ExAllocatePoolWithTag(
+                NonPagedPool, sizeof(WIN32K_SSDT_ENTRY), 'W32K');
+            if (!pNode) break;
+            RtlZeroMemory(pNode, sizeof(WIN32K_SSDT_ENTRY));
+            pNode->Ssn       = i;
+            pNode->GlobalSsn = 0x1000 + i;
+            pNode->Address   = funcAddr;
+
+            if (nameMap && i < 4096 && nameMap[i].Name[0]) {
+                R0sWcsCopyN(pNode->Name, nameMap[i].Name, 64);
+            } else {
+                R0sWcsCopyN(pNode->Name, L"Unknown", 64);
+            }
+
+            KeAcquireSpinLock(&g_Win32kSsdtListLock, &oldIrql);
+            InsertHeadList(&g_Win32kSsdtListHead, &pNode->ListEntry);
+            KeReleaseSpinLock(&g_Win32kSsdtListLock, oldIrql);
+        }
+
+        if (nameMap) ExFreePoolWithTag(nameMap, 'W32U');
+        g_Win32kSsdtBuilt = TRUE;
+        status = STATUS_SUCCESS;
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        status = GetExceptionCode();
+    }
+    return status;
+}
+
+PWIN32K_SSDT_ENTRY FindWin32kSsdtBySsn(ULONG ssn)
+{
+    PWIN32K_SSDT_ENTRY found = NULL;
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&g_Win32kSsdtListLock, &oldIrql);
+    __try {
+        PLIST_ENTRY p = g_Win32kSsdtListHead.Flink;
+        while (p != &g_Win32kSsdtListHead) {
+            PWIN32K_SSDT_ENTRY e = CONTAINING_RECORD(p, WIN32K_SSDT_ENTRY, ListEntry);
+            if (e->Ssn == ssn || e->GlobalSsn == ssn) { found = e; break; }
+            p = p->Flink;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) { found = NULL; }
+    KeReleaseSpinLock(&g_Win32kSsdtListLock, oldIrql);
+    return found;
+}
+
+PWIN32K_SSDT_ENTRY FindWin32kSsdtByName(const WCHAR* name)
+{
+    PWIN32K_SSDT_ENTRY found = NULL;
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&g_Win32kSsdtListLock, &oldIrql);
+    __try {
+        PLIST_ENTRY p = g_Win32kSsdtListHead.Flink;
+        while (p != &g_Win32kSsdtListHead) {
+            PWIN32K_SSDT_ENTRY e = CONTAINING_RECORD(p, WIN32K_SSDT_ENTRY, ListEntry);
+            if (R0sWcsEqI(e->Name, name)) { found = e; break; }
+            p = p->Flink;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) { found = NULL; }
+    KeReleaseSpinLock(&g_Win32kSsdtListLock, oldIrql);
     return found;
 }
 
@@ -1528,6 +1862,12 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         KeInitializeSpinLock(&g_SsdtListLock);
         g_SsdtBuilt = FALSE;
 
+        
+        InitializeListHead(&g_Win32kSsdtListHead);
+        KeInitializeSpinLock(&g_Win32kSsdtListLock);
+        g_Win32kSsdtBuilt = FALSE;
+        g_SsnTableSelect  = 0;
+
         InitializeListHead(&g_VarTableHead);
         KeInitializeSpinLock(&g_VarTableLock);
         g_VarNextId = 1;
@@ -1560,6 +1900,7 @@ VOID DriverUnload(PDRIVER_OBJECT DriverObject)
     PHIDDEN_PROCESS_ENTRY pEntry;
     PFUNCTION_ENTRY pFunc;
     PSSDT_ENTRY pSsdt;
+    PWIN32K_SSDT_ENTRY pW;
     PEPROCESS pSys;
     PLIST_ENTRY pLink;
     PLIST_ENTRY pSysLink;
@@ -1623,6 +1964,24 @@ VOID DriverUnload(PDRIVER_OBJECT DriverObject)
             pList = pNext;
         }
         KeReleaseSpinLock(&g_SsdtListLock, oldIrql);
+    } __except(EXCEPTION_EXECUTE_HANDLER) { }
+
+    
+    __try {
+        KeAcquireSpinLock(&g_Win32kSsdtListLock, &oldIrql);
+        pList = g_Win32kSsdtListHead.Flink;
+        while (pList != &g_Win32kSsdtListHead) {
+            pW    = CONTAINING_RECORD(pList, WIN32K_SSDT_ENTRY, ListEntry);
+            pNext = pList->Flink;
+            RemoveEntryList(pList);
+            KeReleaseSpinLock(&g_Win32kSsdtListLock, oldIrql);
+
+            ExFreePoolWithTag(pW, 'W32K');
+
+            KeAcquireSpinLock(&g_Win32kSsdtListLock, &oldIrql);
+            pList = pNext;
+        }
+        KeReleaseSpinLock(&g_Win32kSsdtListLock, oldIrql);
     } __except(EXCEPTION_EXECUTE_HANDLER) { }
 
     __try { R0sFreeAuthList(); } __except(EXCEPTION_EXECUTE_HANDLER) { }
@@ -2249,6 +2608,7 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
     NTSTATUS status = STATUS_SUCCESS;
     KIRQL oldIrql;
 
+    
     if (g_GetFunctionMode == 0) {
         if (!g_FunctionTableBuilt) {
             BOOLEAN needBuild = FALSE;
@@ -2367,7 +2727,10 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
                 return STATUS_SUCCESS;
             }
         }
-    } else {
+    }
+
+    
+    if (g_GetFunctionMode == 1) {
         if (!g_SsdtBuilt) {
             status = BuildSsdtTable();
             if (!NT_SUCCESS(status)) { *Info = 0; return status; }
@@ -2451,6 +2814,212 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
             }
         }
     }
+
+    
+    if (g_GetFunctionMode == 2) {
+        if (!g_Win32kSsdtBuilt) {
+            status = BuildWin32kSsdtTable();
+            if (!NT_SUCCESS(status)) { *Info = 0; return status; }
+        }
+        if (InputSize < sizeof(ULONG) || !InputBuffer) return STATUS_INVALID_PARAMETER;
+        {
+            PGET_KERNEL_FUNCTION_INPUT pIn = (PGET_KERNEL_FUNCTION_INPUT)InputBuffer;
+            ULONG nameLen = pIn->NameLength;
+            if (nameLen > 0) {
+                const WCHAR* name;
+                PWIN32K_SSDT_ENTRY entry = NULL;
+                if (InputSize < sizeof(GET_KERNEL_FUNCTION_INPUT) + nameLen - 1) return STATUS_BUFFER_TOO_SMALL;
+                name = pIn->Name;
+                __try {
+                    if (IsNumberString(name)) entry = FindWin32kSsdtBySsn(WcharToUlong(name));
+                    else entry = FindWin32kSsdtByName(name);
+                }
+                __except (EXCEPTION_EXECUTE_HANDLER) {
+                    return GetExceptionCode();
+                }
+                if (!entry) return STATUS_NOT_FOUND;
+                if (OutputSize >= sizeof(KERNEL_FUNCTION_ENTRY)) {
+                    PKERNEL_FUNCTION_ENTRY pOut = (PKERNEL_FUNCTION_ENTRY)OutputBuffer;
+                    __try {
+                        pOut->Address = entry->Address;
+                        R0sWcsCopyN(pOut->Name, entry->Name, 64);
+                    }
+                    __except (EXCEPTION_EXECUTE_HANDLER) {
+                        return GetExceptionCode();
+                    }
+                    *Info = sizeof(KERNEL_FUNCTION_ENTRY);
+                    return STATUS_SUCCESS;
+                } else return STATUS_BUFFER_TOO_SMALL;
+            } else {
+                ULONG count = 0;
+                ULONG required;
+                PWIN32K_SSDT_ENTRY_INFO pOut;
+                PLIST_ENTRY pList;
+                ULONG idx;
+
+                KeAcquireSpinLock(&g_Win32kSsdtListLock, &oldIrql);
+                __try {
+                    pList = g_Win32kSsdtListHead.Flink;
+                    while (pList != &g_Win32kSsdtListHead) { count++; pList = pList->Flink; }
+                }
+                __except (EXCEPTION_EXECUTE_HANDLER) {
+                    KeReleaseSpinLock(&g_Win32kSsdtListLock, oldIrql);
+                    return GetExceptionCode();
+                }
+                KeReleaseSpinLock(&g_Win32kSsdtListLock, oldIrql);
+
+                required = sizeof(ULONG) + count * sizeof(WIN32K_SSDT_ENTRY_INFO);
+                if (OutputSize < required) { *Info = required; return STATUS_BUFFER_TOO_SMALL; }
+
+                __try {
+                    *(ULONG*)OutputBuffer = count;
+                }
+                __except (EXCEPTION_EXECUTE_HANDLER) {
+                    return GetExceptionCode();
+                }
+                pOut = (PWIN32K_SSDT_ENTRY_INFO)((PUCHAR)OutputBuffer + sizeof(ULONG));
+
+                KeAcquireSpinLock(&g_Win32kSsdtListLock, &oldIrql);
+                __try {
+                    pList = g_Win32kSsdtListHead.Flink;
+                    idx = 0;
+                    while (pList != &g_Win32kSsdtListHead && idx < count) {
+                        PWIN32K_SSDT_ENTRY e = CONTAINING_RECORD(pList, WIN32K_SSDT_ENTRY, ListEntry);
+                        pOut[idx].Ssn       = e->Ssn;
+                        pOut[idx].GlobalSsn = e->GlobalSsn;
+                        pOut[idx].Address   = e->Address;
+                        R0sWcsCopyN(pOut[idx].Name, e->Name, 64);
+                        idx++;
+                        pList = pList->Flink;
+                    }
+                }
+                __finally {
+                    KeReleaseSpinLock(&g_Win32kSsdtListLock, oldIrql);
+                }
+                *Info = required;
+                return STATUS_SUCCESS;
+            }
+        }
+    }
+
+    
+    if (g_GetFunctionMode == 3) {
+        if (!g_SsdtBuilt) {
+            status = BuildSsdtTable();
+            if (!NT_SUCCESS(status)) { *Info = 0; return status; }
+        }
+        if (!g_Win32kSsdtBuilt) {
+            status = BuildWin32kSsdtTable();
+            if (!NT_SUCCESS(status)) { *Info = 0; return status; }
+        }
+        if (InputSize < sizeof(ULONG) || !InputBuffer) return STATUS_INVALID_PARAMETER;
+        {
+            PGET_KERNEL_FUNCTION_INPUT pIn = (PGET_KERNEL_FUNCTION_INPUT)InputBuffer;
+            ULONG nameLen = pIn->NameLength;
+
+            if (nameLen > 0) {
+                const WCHAR* name;
+                if (InputSize < sizeof(GET_KERNEL_FUNCTION_INPUT) + nameLen - 1) return STATUS_BUFFER_TOO_SMALL;
+                name = pIn->Name;
+                if (OutputSize < sizeof(KERNEL_FUNCTION_ENTRY)) return STATUS_BUFFER_TOO_SMALL;
+
+                __try {
+                    if (IsNumberString(name)) {
+                        ULONG ssn = WcharToUlong(name);
+                        PSSDT_ENTRY ne = FindSsdtBySsn(ssn);
+                        if (ne) {
+                            PKERNEL_FUNCTION_ENTRY pOut = (PKERNEL_FUNCTION_ENTRY)OutputBuffer;
+                            pOut->Address = ne->Address;
+                            R0sWcsCopyN(pOut->Name, ne->Name, 64);
+                            *Info = sizeof(KERNEL_FUNCTION_ENTRY);
+                            return STATUS_SUCCESS;
+                        }
+                        PWIN32K_SSDT_ENTRY we = FindWin32kSsdtBySsn(ssn);
+                        if (we) {
+                            PKERNEL_FUNCTION_ENTRY pOut = (PKERNEL_FUNCTION_ENTRY)OutputBuffer;
+                            pOut->Address = we->Address;
+                            R0sWcsCopyN(pOut->Name, we->Name, 64);
+                            *Info = sizeof(KERNEL_FUNCTION_ENTRY);
+                            return STATUS_SUCCESS;
+                        }
+                        return STATUS_NOT_FOUND;
+                    } else {
+                        PSSDT_ENTRY ne = FindSsdtByName(name);
+                        if (ne) {
+                            PKERNEL_FUNCTION_ENTRY pOut = (PKERNEL_FUNCTION_ENTRY)OutputBuffer;
+                            pOut->Address = ne->Address;
+                            R0sWcsCopyN(pOut->Name, ne->Name, 64);
+                            *Info = sizeof(KERNEL_FUNCTION_ENTRY);
+                            return STATUS_SUCCESS;
+                        }
+                        PWIN32K_SSDT_ENTRY we = FindWin32kSsdtByName(name);
+                        if (we) {
+                            PKERNEL_FUNCTION_ENTRY pOut = (PKERNEL_FUNCTION_ENTRY)OutputBuffer;
+                            pOut->Address = we->Address;
+                            R0sWcsCopyN(pOut->Name, we->Name, 64);
+                            *Info = sizeof(KERNEL_FUNCTION_ENTRY);
+                            return STATUS_SUCCESS;
+                        }
+                        return STATUS_NOT_FOUND;
+                    }
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                    return GetExceptionCode();
+                }
+            } else {
+                ULONG ntCount = 0, wkCount = 0, total, required, idx;
+                PSSDT_ENTRY_INFO pOut;
+                PLIST_ENTRY pList;
+
+                KeAcquireSpinLock(&g_SsdtListLock, &oldIrql);
+                pList = g_SsdtListHead.Flink;
+                while (pList != &g_SsdtListHead) { ntCount++; pList = pList->Flink; }
+                KeReleaseSpinLock(&g_SsdtListLock, oldIrql);
+
+                KeAcquireSpinLock(&g_Win32kSsdtListLock, &oldIrql);
+                pList = g_Win32kSsdtListHead.Flink;
+                while (pList != &g_Win32kSsdtListHead) { wkCount++; pList = pList->Flink; }
+                KeReleaseSpinLock(&g_Win32kSsdtListLock, oldIrql);
+
+                total = ntCount + wkCount;
+                required = sizeof(ULONG) + total * sizeof(SSDT_ENTRY_INFO);
+                if (OutputSize < required) { *Info = required; return STATUS_BUFFER_TOO_SMALL; }
+
+                __try { *(ULONG*)OutputBuffer = total; }
+                __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
+                pOut = (PSSDT_ENTRY_INFO)((PUCHAR)OutputBuffer + sizeof(ULONG));
+                idx = 0;
+
+                KeAcquireSpinLock(&g_SsdtListLock, &oldIrql);
+                pList = g_SsdtListHead.Flink;
+                while (pList != &g_SsdtListHead && idx < total) {
+                    PSSDT_ENTRY e = CONTAINING_RECORD(pList, SSDT_ENTRY, ListEntry);
+                    pOut[idx].Ssn     = e->Ssn;
+                    pOut[idx].Address = e->Address;
+                    R0sWcsCopyN(pOut[idx].Name, e->Name, 64);
+                    idx++;
+                    pList = pList->Flink;
+                }
+                KeReleaseSpinLock(&g_SsdtListLock, oldIrql);
+
+                KeAcquireSpinLock(&g_Win32kSsdtListLock, &oldIrql);
+                pList = g_Win32kSsdtListHead.Flink;
+                while (pList != &g_Win32kSsdtListHead && idx < total) {
+                    PWIN32K_SSDT_ENTRY e = CONTAINING_RECORD(pList, WIN32K_SSDT_ENTRY, ListEntry);
+                    pOut[idx].Ssn     = 0x1000 + e->Ssn;
+                    pOut[idx].Address = e->Address;
+                    R0sWcsCopyN(pOut[idx].Name, e->Name, 64);
+                    idx++;
+                    pList = pList->Flink;
+                }
+                KeReleaseSpinLock(&g_Win32kSsdtListLock, oldIrql);
+
+                *Info = required;
+                return STATUS_SUCCESS;
+            }
+        }
+    }
+
+    return STATUS_INVALID_PARAMETER;
 }
 
 NTSTATUS R0SimulateIO(PVOID InputBuffer, ULONG InputSize,
@@ -3098,7 +3667,7 @@ NTSTATUS R0SimulateArbitraryDriverCall(PVOID InputBuffer, ULONG InputSize,
             status = pIrp->IoStatus.Status;
         }
 
-        copyOut = pIrp->IoStatus.Information;
+        copyOut = (ULONG)pIrp->IoStatus.Information;
         if (copyOut > pIn->OutputLength) copyOut = pIn->OutputLength;
 
         pOut->Status      = status;
@@ -3192,20 +3761,103 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                     if (apiInput->ArgumentCount > 16) { status = STATUS_INVALID_PARAMETER; break; }
                     if (outputSize < sizeof(CALL_KERNEL_API_OUTPUT)) { status = STATUS_BUFFER_TOO_SMALL; break; }
 
+                    
                     if (apiInput->Flags & R0SIMULATE_FLAG_USE_ADDRESS) {
                         UINT64 addr = 0;
                         RtlCopyMemory(&addr, apiInput->ApiName, sizeof(addr));
                         apiAddress = (PVOID)(ULONG_PTR)addr;
-                    } else {
+                    }
+                    
+                    else {
                         const WCHAR* name = apiInput->ApiName;
-                        if (g_FunctionLookupMode == 2) {
-                            PSSDT_ENTRY entry = NULL;
-                            if (!g_SsdtBuilt) { status = BuildSsdtTable(); if (!NT_SUCCESS(status)) break; }
-                            if (IsNumberString(name)) entry = FindSsdtBySsn(WcharToUlong(name));
-                            else entry = FindSsdtByName(name);
-                            if (entry) apiAddress = (PVOID)(ULONG_PTR)entry->Address;
-                            else status = STATUS_NOT_FOUND;
-                        } else if (g_FunctionLookupMode == 1) {
+
+                        
+
+                        if (g_FunctionLookupMode == 2 || g_FunctionLookupMode == 3) {
+                            BOOLEAN useWin32k = (g_FunctionLookupMode == 3);
+
+                            
+                            if (IsNumberString(name)) {
+                                ULONG ssn = WcharToUlong(name);
+                                if (g_SsnTableSelect == 1) {
+                                    
+                                    if (!g_Win32kSsdtBuilt) {
+                                        status = BuildWin32kSsdtTable();
+                                        if (!NT_SUCCESS(status)) break;
+                                    }
+                                    PWIN32K_SSDT_ENTRY we = FindWin32kSsdtBySsn(ssn);
+                                    if (we) apiAddress = (PVOID)(ULONG_PTR)we->Address;
+                                    else    status = STATUS_NOT_FOUND;
+                                } else {
+                                    
+                                    if (!g_SsdtBuilt) {
+                                        status = BuildSsdtTable();
+                                        if (!NT_SUCCESS(status)) break;
+                                    }
+                                    PSSDT_ENTRY ne = FindSsdtBySsn(ssn);
+                                    if (ne) apiAddress = (PVOID)(ULONG_PTR)ne->Address;
+                                    else    status = STATUS_NOT_FOUND;
+                                }
+                            }
+                            
+                            else {
+                                if (useWin32k) {
+                                    if (!g_Win32kSsdtBuilt) {
+                                        status = BuildWin32kSsdtTable();
+                                        if (!NT_SUCCESS(status)) break;
+                                    }
+                                    PWIN32K_SSDT_ENTRY we = FindWin32kSsdtByName(name);
+                                    if (we) apiAddress = (PVOID)(ULONG_PTR)we->Address;
+                                    else    status = STATUS_NOT_FOUND;
+                                } else {
+                                    if (!g_SsdtBuilt) {
+                                        status = BuildSsdtTable();
+                                        if (!NT_SUCCESS(status)) break;
+                                    }
+                                    PSSDT_ENTRY ne = FindSsdtByName(name);
+                                    if (ne) apiAddress = (PVOID)(ULONG_PTR)ne->Address;
+                                    else    status = STATUS_NOT_FOUND;
+                                }
+                            }
+                        }
+                        
+                        else if (g_FunctionLookupMode == 4) {
+                            
+                            if (!g_SsdtBuilt) {
+                                status = BuildSsdtTable();
+                                if (!NT_SUCCESS(status)) break;
+                            }
+                            if (!g_Win32kSsdtBuilt) {
+                                status = BuildWin32kSsdtTable();
+                                if (!NT_SUCCESS(status)) break;
+                            }
+
+                            if (IsNumberString(name)) {
+                                
+
+                                ULONG ssn = WcharToUlong(name);
+                                PSSDT_ENTRY ne = FindSsdtBySsn(ssn);
+                                if (ne) {
+                                    apiAddress = (PVOID)(ULONG_PTR)ne->Address;
+                                } else {
+                                    PWIN32K_SSDT_ENTRY we = FindWin32kSsdtBySsn(ssn);
+                                    if (we) apiAddress = (PVOID)(ULONG_PTR)we->Address;
+                                    else    status = STATUS_NOT_FOUND;
+                                }
+                            }
+                            else {
+                                
+                                PSSDT_ENTRY ne = FindSsdtByName(name);
+                                if (ne) {
+                                    apiAddress = (PVOID)(ULONG_PTR)ne->Address;
+                                } else {
+                                    PWIN32K_SSDT_ENTRY we = FindWin32kSsdtByName(name);
+                                    if (we) apiAddress = (PVOID)(ULONG_PTR)we->Address;
+                                    else    status = STATUS_NOT_FOUND;
+                                }
+                            }
+                        }
+                        else if (g_FunctionLookupMode == 1) {
                             if (!g_FunctionTableBuilt) {
                                 KIRQL oldIrql;
                                 KeAcquireSpinLock(&g_FunctionTableLock, &oldIrql);
@@ -3233,7 +3885,8 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                                 KeReleaseSpinLock(&g_FunctionTableLock, oldIrql);
                             }
                             if (!apiAddress) status = STATUS_NOT_FOUND;
-                        } else {
+                        }
+                        else {
                             UNICODE_STRING uniName;
                             RtlInitUnicodeString(&uniName, name);
                             apiAddress = MmGetSystemRoutineAddress(&uniName);
