@@ -23,6 +23,12 @@ extern "C" {
 #define IOCTL_R0SIMULATE_SET_INTERNAL_VARS          CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_IO                         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x809, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_AUTHORIZED_LIST            CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80A, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_CREATE_SYSTEM_THREAD       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80B, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_DIRECT_CREATE_DRIVER       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80C, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_MSR                        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80D, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_IRQL                       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80E, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_ARBITRARY_DRIVER_CALL      CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80F, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #define IOCTL_INDEX_EXEC_INSTRUCTION      0
 #define IOCTL_INDEX_CALL_KERNEL_API       1
@@ -34,6 +40,12 @@ extern "C" {
 #define IOCTL_INDEX_SET_INTERNAL_VARS     7
 #define IOCTL_INDEX_GET_KERNEL_FUNCTION   8
 #define IOCTL_INDEX_IO                    9
+#define IOCTL_INDEX_AUTHORIZED_LIST       10
+#define IOCTL_INDEX_CREATE_SYSTEM_THREAD  11
+#define IOCTL_INDEX_DIRECT_CREATE_DRIVER  12
+#define IOCTL_INDEX_MSR                   13
+#define IOCTL_INDEX_IRQL                  14
+#define IOCTL_INDEX_ARBITRARY_DRIVER_CALL 15
 
 // ----- Flags -----
 #define R0SIMULATE_FLAG_USE_ADDRESS  0x00000001
@@ -79,6 +91,20 @@ extern "C" {
 #define R0SIO_WRITE_BYTE    0x11
 #define R0SIO_WRITE_WORD    0x12
 #define R0SIO_WRITE_DWORD   0x13
+
+// ----- Authorized List -----
+#define R0SAUTH_OP_ADD      0x01
+#define R0SAUTH_OP_REMOVE   0x02
+#define R0SAUTH_OP_LIST     0x03
+
+// ----- MSR -----
+#define R0SMSR_OP_READ      0x01
+#define R0SMSR_OP_WRITE     0x02
+
+// ----- IRQL -----
+#define R0SIRQL_OP_QUERY    0x01
+#define R0SIRQL_OP_RAISE    0x02
+#define R0SIRQL_OP_LOWER    0x03
 
 // ----- Structures -----
 typedef struct _EXEC_INSTRUCTION_INPUT {
@@ -210,6 +236,90 @@ typedef struct _R0S_IO_OUTPUT {
     NTSTATUS Status;
 } R0S_IO_OUTPUT, *PR0S_IO_OUTPUT;
 
+typedef struct _R0S_AUTH_LIST_INPUT {
+    ULONG Operation;
+    ULONG Pid;
+} R0S_AUTH_LIST_INPUT, *PR0S_AUTH_LIST_INPUT;
+
+typedef struct _R0S_AUTH_ENTRY_INFO {
+    HANDLE Pid;
+    ULONG  Reserved;
+    UCHAR  Valid;
+    UCHAR  Pad[7];
+} R0S_AUTH_ENTRY_INFO, *PR0S_AUTH_ENTRY_INFO;
+
+typedef struct _R0S_AUTH_LIST_OUTPUT {
+    ULONG Count;
+    ULONG Reserved;
+    R0S_AUTH_ENTRY_INFO Entries[1];
+} R0S_AUTH_LIST_OUTPUT, *PR0S_AUTH_LIST_OUTPUT;
+
+typedef struct _R0S_CREATE_THREAD_INPUT {
+    UINT64 StartRoutine;
+    UINT64 StartContext;
+    ULONG  DesiredAccess;
+    ULONG  Reserved;
+} R0S_CREATE_THREAD_INPUT, *PR0S_CREATE_THREAD_INPUT;
+
+typedef struct _R0S_CREATE_THREAD_OUTPUT {
+    HANDLE   ThreadHandle;
+    NTSTATUS Status;
+} R0S_CREATE_THREAD_OUTPUT, *PR0S_CREATE_THREAD_OUTPUT;
+
+typedef struct _R0S_CREATE_DRIVER_INPUT {
+    UINT64 InitFunction;
+    ULONG  NameLength;
+    ULONG  Reserved;
+    WCHAR  Name[1];
+} R0S_CREATE_DRIVER_INPUT, *PR0S_CREATE_DRIVER_INPUT;
+
+typedef struct _R0S_CREATE_DRIVER_OUTPUT {
+    UINT64   DriverObject;
+    NTSTATUS Status;
+} R0S_CREATE_DRIVER_OUTPUT, *PR0S_CREATE_DRIVER_OUTPUT;
+
+typedef struct _R0S_MSR_INPUT {
+    ULONG  Operation;
+    ULONG  Msr;
+    UINT64 Value;
+} R0S_MSR_INPUT, *PR0S_MSR_INPUT;
+
+typedef struct _R0S_MSR_OUTPUT {
+    UINT64   Value;
+    NTSTATUS Status;
+} R0S_MSR_OUTPUT, *PR0S_MSR_OUTPUT;
+
+typedef struct _R0S_IRQL_INPUT {
+    ULONG Operation;
+    UCHAR TargetIrql;
+    UCHAR Reserved[3];
+} R0S_IRQL_INPUT, *PR0S_IRQL_INPUT;
+
+typedef struct _R0S_IRQL_OUTPUT {
+    UCHAR    OldIrql;
+    UCHAR    NewIrql;
+    UCHAR    Reserved[2];
+    NTSTATUS Status;
+} R0S_IRQL_OUTPUT, *PR0S_IRQL_OUTPUT;
+
+typedef struct _R0S_CALL_DRIVER_INPUT {
+    UINT64 DriverObject;
+    ULONG  MajorFunction;
+    ULONG  MinorFunction;
+    ULONG  IoControlCode;
+    ULONG  InputLength;
+    ULONG  OutputLength;
+    ULONG  Reserved;
+    UCHAR  Data[1];
+} R0S_CALL_DRIVER_INPUT, *PR0S_CALL_DRIVER_INPUT;
+
+typedef struct _R0S_CALL_DRIVER_OUTPUT {
+    NTSTATUS Status;
+    ULONG    Information;
+    ULONG    Reserved;
+    UCHAR    Data[1];
+} R0S_CALL_DRIVER_OUTPUT, *PR0S_CALL_DRIVER_OUTPUT;
+
 // ----- Exported Functions -----
 R0SIMULATES_API UINT64 R0SimulateISA(
     const void* pInstruction,
@@ -272,6 +382,47 @@ R0SIMULATES_API BOOL R0SimulateIO(
     ULONG  Port,
     ULONG  Value,
     PULONG pResult);
+
+R0SIMULATES_API BOOL R0SimulateAuthorizedListOperations(
+    ULONG  operation,
+    ULONG  pid,
+    PVOID  pOutBuffer,
+    ULONG  outSize,
+    PULONG pInfoCount);
+
+R0SIMULATES_API BOOL R0SimulateCreateSystemThread(
+    UINT64  startRoutine,
+    UINT64  startContext,
+    ULONG   desiredAccess,
+    PHANDLE pOutThreadHandle);
+
+R0SIMULATES_API BOOL R0SimulateDirectCreateDriver(
+    UINT64       initFunction,
+    const WCHAR* driverName,
+    PUINT64      pOutDriverObject);
+
+R0SIMULATES_API BOOL R0SimulateMSR(
+    ULONG   operation,
+    ULONG   msr,
+    UINT64  value,
+    PUINT64 pOutValue);
+
+R0SIMULATES_API BOOL R0SimulateIRQL(
+    ULONG  operation,
+    UCHAR  targetIrql,
+    PUCHAR pOldIrql,
+    PUCHAR pNewIrql);
+
+R0SIMULATES_API BOOL R0SimulateArbitraryDriverCall(
+    UINT64 driverObject,
+    ULONG  majorFunction,
+    ULONG  minorFunction,
+    ULONG  ioControlCode,
+    PVOID  pInputData,
+    ULONG  inputLength,
+    PVOID  pOutBuffer,
+    ULONG  outSize,
+    PULONG pInformation);
 
 #ifdef __cplusplus
 }

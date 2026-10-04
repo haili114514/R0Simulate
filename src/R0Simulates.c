@@ -735,3 +735,356 @@ R0SIMULATES_API BOOL R0SimulateIO(
     result = TRUE;
     return result;
 }
+
+R0SIMULATES_API BOOL R0SimulateAuthorizedListOperations(
+    ULONG  operation,
+    ULONG  pid,
+    PVOID  pOutBuffer,
+    ULONG  outSize,
+    PULONG pInfoCount)
+{
+    BOOL result = FALSE;
+    R0S_AUTH_LIST_INPUT in;
+    IO_STATUS_BLOCK ioStatus;
+    NTSTATUS status;
+
+    if (!R0Sim_OpenDriver()) return FALSE;
+    if (operation != R0SAUTH_OP_ADD &&
+        operation != R0SAUTH_OP_REMOVE &&
+        operation != R0SAUTH_OP_LIST) {
+        RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    memset(&in, 0, sizeof(in));
+    in.Operation = operation;
+    in.Pid       = pid;
+
+    memset(&ioStatus, 0, sizeof(ioStatus));
+
+    status = NtDeviceIoControlFile(
+        g_hDriver, NULL, NULL, NULL, &ioStatus,
+        IOCTL_R0SIMULATE_AUTHORIZED_LIST,
+        &in, sizeof(in),
+        pOutBuffer, outSize
+    );
+
+    if (!NT_SUCCESS(status)) {
+        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        return FALSE;
+    }
+
+    if (operation == R0SAUTH_OP_ADD || operation == R0SAUTH_OP_REMOVE) {
+        if (outSize >= sizeof(NTSTATUS) && pOutBuffer) {
+            NTSTATUS st = *(NTSTATUS*)pOutBuffer;
+            if (!NT_SUCCESS(st)) {
+                RtlSetLastWin32Error(NtStatusToWin32Error(st));
+                return FALSE;
+            }
+        } else {
+            RtlSetLastWin32Error(ERROR_GEN_FAILURE);
+            return FALSE;
+        }
+    } else {
+        if (pInfoCount) {
+            if (outSize >= sizeof(ULONG) && pOutBuffer) {
+                *pInfoCount = *(PULONG)pOutBuffer;
+            } else {
+                *pInfoCount = 0;
+            }
+        }
+    }
+
+    RtlSetLastWin32Error(ERROR_SUCCESS);
+    result = TRUE;
+    return result;
+}
+
+R0SIMULATES_API BOOL R0SimulateCreateSystemThread(
+    UINT64  startRoutine,
+    UINT64  startContext,
+    ULONG   desiredAccess,
+    PHANDLE pOutThreadHandle)
+{
+    BOOL result = FALSE;
+    R0S_CREATE_THREAD_INPUT  in;
+    R0S_CREATE_THREAD_OUTPUT out;
+    IO_STATUS_BLOCK ioStatus;
+    NTSTATUS status;
+
+    if (!R0Sim_OpenDriver()) return FALSE;
+    if (!pOutThreadHandle) {
+        RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    memset(&in, 0, sizeof(in));
+    in.StartRoutine  = startRoutine;
+    in.StartContext  = startContext;
+    in.DesiredAccess = desiredAccess;
+
+    memset(&out, 0, sizeof(out));
+    memset(&ioStatus, 0, sizeof(ioStatus));
+
+    status = NtDeviceIoControlFile(
+        g_hDriver, NULL, NULL, NULL, &ioStatus,
+        IOCTL_R0SIMULATE_CREATE_SYSTEM_THREAD,
+        &in, sizeof(in),
+        &out, sizeof(out)
+    );
+
+    if (!NT_SUCCESS(status)) {
+        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        return FALSE;
+    }
+    if (!NT_SUCCESS((NTSTATUS)out.Status)) {
+        RtlSetLastWin32Error(NtStatusToWin32Error((NTSTATUS)out.Status));
+        return FALSE;
+    }
+
+    *pOutThreadHandle = out.ThreadHandle;
+    RtlSetLastWin32Error(ERROR_SUCCESS);
+    result = TRUE;
+    return result;
+}
+
+R0SIMULATES_API BOOL R0SimulateDirectCreateDriver(
+    UINT64       initFunction,
+    const WCHAR* driverName,
+    PUINT64      pOutDriverObject)
+{
+    BOOL result = FALSE;
+    ULONG nameLen = 0;
+    SIZE_T totalInSize;
+    PR0S_CREATE_DRIVER_INPUT  pIn;
+    R0S_CREATE_DRIVER_OUTPUT  out;
+    IO_STATUS_BLOCK ioStatus;
+    NTSTATUS status;
+
+    if (!R0Sim_OpenDriver()) return FALSE;
+    if (!pOutDriverObject) {
+        RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    totalInSize = sizeof(R0S_CREATE_DRIVER_INPUT);
+    if (driverName) {
+        nameLen = (ULONG)((my_wcslen(driverName) + 1) * sizeof(WCHAR));
+        if (nameLen > 256) {
+            RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        totalInSize += nameLen - sizeof(WCHAR);
+    }
+
+    pIn = (PR0S_CREATE_DRIVER_INPUT)RtlAllocateHeap(R0_HEAP, HEAP_ZERO_MEMORY, totalInSize);
+    if (!pIn) {
+        RtlSetLastWin32Error(ERROR_OUTOFMEMORY);
+        return FALSE;
+    }
+
+    pIn->InitFunction = initFunction;
+    pIn->NameLength   = nameLen;
+    if (driverName) {
+        memcpy(pIn->Name, driverName, nameLen);
+    }
+
+    memset(&out, 0, sizeof(out));
+    memset(&ioStatus, 0, sizeof(ioStatus));
+
+    status = NtDeviceIoControlFile(
+        g_hDriver, NULL, NULL, NULL, &ioStatus,
+        IOCTL_R0SIMULATE_DIRECT_CREATE_DRIVER,
+        pIn, (ULONG)totalInSize,
+        &out, sizeof(out)
+    );
+
+    RtlFreeHeap(R0_HEAP, 0, pIn);
+
+    if (!NT_SUCCESS(status)) {
+        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        return FALSE;
+    }
+    if (!NT_SUCCESS((NTSTATUS)out.Status)) {
+        RtlSetLastWin32Error(NtStatusToWin32Error((NTSTATUS)out.Status));
+        return FALSE;
+    }
+
+    *pOutDriverObject = out.DriverObject;
+    RtlSetLastWin32Error(ERROR_SUCCESS);
+    result = TRUE;
+    return result;
+}
+
+R0SIMULATES_API BOOL R0SimulateMSR(
+    ULONG   operation,
+    ULONG   msr,
+    UINT64  value,
+    PUINT64 pOutValue)
+{
+    BOOL result = FALSE;
+    R0S_MSR_INPUT  in;
+    R0S_MSR_OUTPUT out;
+    IO_STATUS_BLOCK ioStatus;
+    NTSTATUS status;
+
+    if (!R0Sim_OpenDriver()) return FALSE;
+    if (operation != R0SMSR_OP_READ && operation != R0SMSR_OP_WRITE) {
+        RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    memset(&in, 0, sizeof(in));
+    in.Operation = operation;
+    in.Msr       = msr;
+    in.Value     = value;
+
+    memset(&out, 0, sizeof(out));
+    memset(&ioStatus, 0, sizeof(ioStatus));
+
+    status = NtDeviceIoControlFile(
+        g_hDriver, NULL, NULL, NULL, &ioStatus,
+        IOCTL_R0SIMULATE_MSR,
+        &in, sizeof(in),
+        &out, sizeof(out)
+    );
+
+    if (!NT_SUCCESS(status)) {
+        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        return FALSE;
+    }
+    if (!NT_SUCCESS((NTSTATUS)out.Status)) {
+        RtlSetLastWin32Error(NtStatusToWin32Error((NTSTATUS)out.Status));
+        return FALSE;
+    }
+
+    if (pOutValue) *pOutValue = out.Value;
+    RtlSetLastWin32Error(ERROR_SUCCESS);
+    result = TRUE;
+    return result;
+}
+
+R0SIMULATES_API BOOL R0SimulateIRQL(
+    ULONG  operation,
+    UCHAR  targetIrql,
+    PUCHAR pOldIrql,
+    PUCHAR pNewIrql)
+{
+    BOOL result = FALSE;
+    R0S_IRQL_INPUT  in;
+    R0S_IRQL_OUTPUT out;
+    IO_STATUS_BLOCK ioStatus;
+    NTSTATUS status;
+
+    if (!R0Sim_OpenDriver()) return FALSE;
+    if (operation != R0SIRQL_OP_QUERY &&
+        operation != R0SIRQL_OP_RAISE &&
+        operation != R0SIRQL_OP_LOWER) {
+        RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    memset(&in, 0, sizeof(in));
+    in.Operation  = operation;
+    in.TargetIrql = targetIrql;
+
+    memset(&out, 0, sizeof(out));
+    memset(&ioStatus, 0, sizeof(ioStatus));
+
+    status = NtDeviceIoControlFile(
+        g_hDriver, NULL, NULL, NULL, &ioStatus,
+        IOCTL_R0SIMULATE_IRQL,
+        &in, sizeof(in),
+        &out, sizeof(out)
+    );
+
+    if (!NT_SUCCESS(status)) {
+        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        return FALSE;
+    }
+    if (!NT_SUCCESS((NTSTATUS)out.Status)) {
+        RtlSetLastWin32Error(NtStatusToWin32Error((NTSTATUS)out.Status));
+        return FALSE;
+    }
+
+    if (pOldIrql) *pOldIrql = out.OldIrql;
+    if (pNewIrql) *pNewIrql = out.NewIrql;
+    RtlSetLastWin32Error(ERROR_SUCCESS);
+    result = TRUE;
+    return result;
+}
+
+R0SIMULATES_API BOOL R0SimulateArbitraryDriverCall(
+    UINT64 driverObject,
+    ULONG  majorFunction,
+    ULONG  minorFunction,
+    ULONG  ioControlCode,
+    PVOID  pInputData,
+    ULONG  inputLength,
+    PVOID  pOutBuffer,
+    ULONG  outSize,
+    PULONG pInformation)
+{
+    BOOL result = FALSE;
+    SIZE_T totalInSize;
+    PR0S_CALL_DRIVER_INPUT pIn;
+    IO_STATUS_BLOCK ioStatus;
+    NTSTATUS status;
+
+    if (!R0Sim_OpenDriver()) return FALSE;
+    if (inputLength > 0 && !pInputData) {
+        RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    totalInSize = sizeof(R0S_CALL_DRIVER_INPUT);
+    if (inputLength > 0) {
+        totalInSize += inputLength - 1;
+    }
+
+    pIn = (PR0S_CALL_DRIVER_INPUT)RtlAllocateHeap(R0_HEAP, HEAP_ZERO_MEMORY, totalInSize);
+    if (!pIn) {
+        RtlSetLastWin32Error(ERROR_OUTOFMEMORY);
+        return FALSE;
+    }
+
+    pIn->DriverObject  = driverObject;
+    pIn->MajorFunction = majorFunction;
+    pIn->MinorFunction = minorFunction;
+    pIn->IoControlCode = ioControlCode;
+    pIn->InputLength   = inputLength;
+    pIn->OutputLength  = outSize;
+    pIn->Reserved      = 0;
+
+    if (inputLength > 0) {
+        memcpy(pIn->Data, pInputData, inputLength);
+    }
+
+    memset(&ioStatus, 0, sizeof(ioStatus));
+
+    status = NtDeviceIoControlFile(
+        g_hDriver, NULL, NULL, NULL, &ioStatus,
+        IOCTL_R0SIMULATE_ARBITRARY_DRIVER_CALL,
+        pIn, (ULONG)totalInSize,
+        pOutBuffer, outSize
+    );
+
+    RtlFreeHeap(R0_HEAP, 0, pIn);
+
+    if (!NT_SUCCESS(status)) {
+        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        return FALSE;
+    }
+    if (pOutBuffer && outSize >= sizeof(R0S_CALL_DRIVER_OUTPUT)) {
+        PR0S_CALL_DRIVER_OUTPUT pOut = (PR0S_CALL_DRIVER_OUTPUT)pOutBuffer;
+        if (!NT_SUCCESS((NTSTATUS)pOut->Status)) {
+            RtlSetLastWin32Error(NtStatusToWin32Error((NTSTATUS)pOut->Status));
+            return FALSE;
+        }
+        if (pInformation) *pInformation = pOut->Information;
+    }
+
+    RtlSetLastWin32Error(ERROR_SUCCESS);
+    result = TRUE;
+    return result;
+}
