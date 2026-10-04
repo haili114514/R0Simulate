@@ -6,6 +6,34 @@
 #include <securitybaseapi.h>
 #include "R0Simulates.h"
 
+#define IRP_MJ_CREATE                       0x00
+#define IRP_MJ_CREATE_NAMED_PIPE            0x01
+#define IRP_MJ_CLOSE                        0x02
+#define IRP_MJ_READ                         0x03
+#define IRP_MJ_WRITE                        0x04
+#define IRP_MJ_QUERY_INFORMATION            0x05
+#define IRP_MJ_SET_INFORMATION              0x06
+#define IRP_MJ_QUERY_EA                     0x07
+#define IRP_MJ_SET_EA                       0x08
+#define IRP_MJ_FLUSH_BUFFERS                0x09
+#define IRP_MJ_QUERY_VOLUME_INFORMATION     0x0A
+#define IRP_MJ_SET_VOLUME_INFORMATION       0x0B
+#define IRP_MJ_DIRECTORY_CONTROL            0x0C
+#define IRP_MJ_FILE_SYSTEM_CONTROL          0x0D
+#define IRP_MJ_DEVICE_CONTROL               0x0E
+#define IRP_MJ_INTERNAL_DEVICE_CONTROL      0x0F
+#define IRP_MJ_SHUTDOWN                     0x10
+#define IRP_MJ_LOCK_CONTROL                 0x11
+#define IRP_MJ_CLEANUP                      0x12
+#define IRP_MJ_CREATE_MAILSLOT              0x13
+#define IRP_MJ_QUERY_SECURITY               0x14
+#define IRP_MJ_SET_SECURITY                 0x15
+#define IRP_MJ_POWER                        0x16
+#define IRP_MJ_SYSTEM_CONTROL               0x17
+#define IRP_MJ_DEVICE_CHANGE                0x18
+#define IRP_MJ_QUERY_QUOTA                  0x19
+#define IRP_MJ_SET_QUOTA                    0x1A
+#define IRP_MJ_PNP                          0x1B
 #ifndef OBJ_KERNEL_HANDLE
 #define OBJ_KERNEL_HANDLE        0x00000200L
 #endif
@@ -19,8 +47,14 @@
 #define OBJ_CASE_INSENSITIVE     0x00000040L
 #endif
 
+#ifndef NT_SUCCESS
+#define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
+#endif
+
 #define R0SKOH_ACCESS_MODE_USER         1
 #define R0SKOH_ACCESS_MODE_KERNEL       0
+
+#define VAR_ID_G_DRIVEROBJECT   0x002A
 
 static void print_last_error(const char* msg)
 {
@@ -102,7 +136,7 @@ int main(void)
             {
                 wprintf(L"        ID=%lu, Name=%s, Size=%lu, Value=0x%llX\n",
                         pInfo[i].Id, pInfo[i].Name, pInfo[i].Size, pInfo[i].Value);
-            } 
+            }
             if (infoCount > 0)
             {
                 ULONG  firstId = pInfo[0].Id;
@@ -255,9 +289,9 @@ int main(void)
         kernelAddr = R0SimulateAPI(
             L"ExAllocatePoolWithTag",
             3, 0,
-            (UINT64)0x200,   
-            (UINT64)256,     
-            tag_DEMO         
+            (UINT64)0x200,
+            (UINT64)256,
+            tag_DEMO
         );
         if (kernelAddr == 0)
         {
@@ -590,6 +624,245 @@ kma_done:
 test10_end:
         if (hProcess != NULL)
             CloseHandle(hProcess);
+        printf("\n");
+    }
+
+    printf("[11] IOCTL_R0SIMULATE_AUTHORIZED_LIST  (R0S AUTH)\n");
+    {
+        BYTE  buf[16 * 1024] = {0};
+        ULONG count = 0;
+        BOOL  ok;
+
+        printf("  [11.1] LIST: enumerate authorized list\n");
+        ok = R0SimulateAuthorizedListOperations(
+            R0SAUTH_OP_LIST, 0, buf, (ULONG)sizeof(buf), &count);
+        if (!ok)
+        {
+            print_last_error("R0S AUTH LIST");
+        }
+        else
+        {
+            R0S_AUTH_LIST_OUTPUT* pOut = (R0S_AUTH_LIST_OUTPUT*)buf;
+            printf("      OK: %lu entries\n", (unsigned long)pOut->Count);
+            printf("      %-12s  %-6s\n", "PID", "Valid");
+            for (ULONG i = 0; i < pOut->Count; i++)
+            {
+                printf("      %-12lu  %-6s\n",
+                    (unsigned long)(ULONG_PTR)pOut->Entries[i].Pid,
+                    pOut->Entries[i].Valid ? "yes" : "no");
+            }
+        }
+
+        printf("  [11.2] ADD current process (PID=%lu)\n", (unsigned long)GetCurrentProcessId());
+        {
+            NTSTATUS st = 0;
+            ok = R0SimulateAuthorizedListOperations(
+                R0SAUTH_OP_ADD, GetCurrentProcessId(), &st, sizeof(st), NULL);
+            if (ok && NT_SUCCESS(st))
+                printf("      OK: added\n");
+            else
+            {
+                printf("      Status=0x%08X\n", st);
+                if (!ok) print_last_error("R0S AUTH ADD");
+            }
+        }
+
+        printf("  [11.3] LIST again\n");
+        memset(buf, 0, sizeof(buf));
+        count = 0;
+        ok = R0SimulateAuthorizedListOperations(
+            R0SAUTH_OP_LIST, 0, buf, (ULONG)sizeof(buf), &count);
+        if (ok)
+        {
+            R0S_AUTH_LIST_OUTPUT* pOut = (R0S_AUTH_LIST_OUTPUT*)buf;
+            printf("      OK: %lu entries\n", (unsigned long)pOut->Count);
+        }
+
+        printf("  [11.4] REMOVE current process\n");
+        {
+            NTSTATUS st = 0;
+            ok = R0SimulateAuthorizedListOperations(
+                R0SAUTH_OP_REMOVE, GetCurrentProcessId(), &st, sizeof(st), NULL);
+            if (ok && NT_SUCCESS(st))
+                printf("      OK: removed\n");
+            else
+            {
+                printf("      Status=0x%08X\n", st);
+                if (!ok) print_last_error("R0S AUTH REMOVE");
+            }
+        }
+        printf("\n");
+    }
+
+    printf("[12] IOCTL_R0SIMULATE_CREATE_SYSTEM_THREAD  (R0S THREAD)\n");
+    {
+        BYTE   shellcode[] = { 0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3 };
+        UINT64 execAddr = 0;
+        HANDLE hThread = NULL;
+        BOOL   ok;
+
+        printf("  [12.1] Allocate executable kernel memory (NonPagedPoolExecute, 64 bytes)\n");
+        execAddr = R0SimulateAPI(
+            L"ExAllocatePoolWithTag",
+            3, 0,
+            (UINT64)0x00000000,   /* NonPagedPoolExecute */
+            (UINT64)64,
+            tag_DEMO
+        );
+        if (execAddr == 0)
+        {
+            print_last_error("alloc exec mem");
+            printf("\n");
+            goto thread_done;
+        }
+        printf("      OK: exec = 0x%016llX\n", execAddr);
+
+        printf("  [12.2] Write shellcode (B8 01 00 00 00 C3 = mov eax,1; ret)\n");
+        ok = R0SimulateKernelMemoryAccess(
+            execAddr, 0, sizeof(shellcode), R0SKMA_OP_WRITE, shellcode);
+        if (!ok)
+        {
+            print_last_error("write shellcode");
+            goto thread_free;
+        }
+
+        printf("  [12.3] Create system thread at that address\n");
+        ok = R0SimulateCreateSystemThread(
+            execAddr, 0, 0, &hThread);
+        if (!ok)
+        {
+            print_last_error("R0S THREAD");
+        }
+        else
+        {
+            printf("      OK: kernel thread handle = 0x%p (note: kernel handle, not closable from user mode)\n", hThread);
+            Sleep(200);
+            printf("      Sleep 200ms waiting for thread to finish\n");
+        }
+
+thread_free:
+        printf("  [12.4] Free executable memory\n");
+        R0SimulateAPI(L"ExFreePoolWithTag", 2, 0, execAddr, tag_DEMO);
+        if (GetLastError() == ERROR_SUCCESS)
+            printf("      OK: freed\n");
+        else
+            print_last_error("free exec mem");
+
+thread_done:
+        printf("\n");
+    }
+
+    printf("[13] IOCTL_R0SIMULATE_MSR  (R0S MSR)\n");
+    {
+        UINT64 value = 0;
+        BOOL   ok;
+        /* IA32_LSTAR - KiSystemCall64 address */
+        ULONG  targetMsr = 0xC0000082;
+
+        printf("  [13.1] Read MSR 0x%08X (IA32_LSTAR)\n", targetMsr);
+        ok = R0SimulateMSR(R0SMSR_OP_READ, targetMsr, 0, &value);
+        if (ok)
+            printf("      OK: value = 0x%016llX\n", value);
+        else
+            print_last_error("R0S MSR read");
+
+        /* read another one */
+        printf("  [13.2] Read MSR 0xC0000100 (IA32_FS_BASE)\n");
+        ok = R0SimulateMSR(R0SMSR_OP_READ, 0xC0000100, 0, &value);
+        if (ok)
+            printf("      OK: value = 0x%016llX\n", value);
+        else
+            print_last_error("R0S MSR read FS_BASE");
+        printf("\n");
+    }
+
+    printf("[14] IOCTL_R0SIMULATE_IRQL  (R0S IRQL)\n");
+    {
+        UCHAR oldIrql = 0, newIrql = 0;
+        BOOL  ok;
+
+        printf("  [14.1] QUERY: read current IRQL\n");
+        ok = R0SimulateIRQL(R0SIRQL_OP_QUERY, 0, &oldIrql, &newIrql);
+        if (ok)
+            printf("      OK: current IRQL = %u\n", oldIrql);
+        else
+            print_last_error("R0S IRQL QUERY");
+        printf("\n");
+    }
+
+    printf("[15] IOCTL_R0SIMULATE_ARBITRARY_DRIVER_CALL  (R0S IRP)\n");
+    {
+        UINT64 driverObject = 0;
+        BOOL   ok;
+        UCHAR  inData[8]  = {0};
+        UCHAR  outData[64] = {0};
+        ULONG  info = 0;
+
+        printf("  [15.1] Read g_DriverObject from variable table (ID=0x%04X)\n", VAR_ID_G_DRIVEROBJECT);
+        ok = R0SimulateSetInternalVariables(
+            R0SIMULATE_VAR_OP_GET,
+            VAR_ID_G_DRIVEROBJECT,
+            0,
+            &driverObject, sizeof(driverObject),
+            NULL,
+            R0SIMULATE_ERROR_MODE_DEFAULT
+        );
+        if (!ok || driverObject == 0)
+        {
+            print_last_error("get g_DriverObject");
+            printf("\n");
+            goto irp_done;
+        }
+        printf("      OK: DRIVER_OBJECT = 0x%016llX\n", driverObject);
+
+        printf("  [15.2] Send IRP_MJ_CREATE to the driver\n");
+        ok = R0SimulateArbitraryDriverCall(
+            driverObject,
+            IRP_MJ_CREATE,      /* 0x00 */
+            0,
+            0,
+            inData, sizeof(inData),
+            outData, sizeof(outData),
+            &info
+        );
+        if (!ok)
+        {
+            print_last_error("R0S IRP CREATE");
+        }
+        else
+        {
+            printf("      OK: driver returned Information = %lu bytes\n", (unsigned long)info);
+        }
+
+        printf("  [15.3] Send IRP_MJ_CLEANUP to a NULL driver object (expect failure)\n");
+        info = 0;
+        memset(outData, 0, sizeof(outData));
+        SetLastError(0);
+        ok = R0SimulateArbitraryDriverCall(
+            0,                  /* NULL driver object */
+            IRP_MJ_CLEANUP,     /* 0x12 */
+            0,
+            0,
+            inData, sizeof(inData),
+            outData, sizeof(outData),
+            &info
+        );
+        if (!ok)
+        {
+            DWORD err = GetLastError();
+            printf("      FAIL returned as expected, error code = 0x%08lX (%lu)\n",
+                   err, err);
+            if (err == ERROR_INVALID_PARAMETER)
+                printf("      PASS: NULL driver object rejected with ERROR_INVALID_PARAMETER\n");
+            else
+                printf("      FAIL: unexpected error code (expected 87 / ERROR_INVALID_PARAMETER)\n");
+        }
+        else
+        {
+            printf("      UNEXPECTED: call succeeded with NULL driver object\n");
+        }
+
+irp_done:
         printf("\n");
     }
 
