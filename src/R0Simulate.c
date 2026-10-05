@@ -10,22 +10,22 @@
 #define DEVICE_NAME     L"\\Device\\R0Simulate"
 #define SYM_LINK_NAME   L"\\DosDevices\\R0Simulate"
 
-#define IOCTL_R0SIMULATE_EXEC_INSTRUCTION           CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_CALL_KERNEL_API            CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_KERNEL_PROCESS_HIDING      CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_PREVIOUS_MODE_SWITCH       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_KERNEL_OPEN_HANDLE         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_KERNEL_MEMORY_ACCESS       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_GET_SYSTEM_TOKEN           CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_SET_INTERNAL_VARS          CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_IO                         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x809, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_AUTHORIZED_LIST            CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80A, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_CREATE_SYSTEM_THREAD       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80B, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_DIRECT_CREATE_DRIVER       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80C, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_MSR                        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80D, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_IRQL                       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80E, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_ARBITRARY_DRIVER_CALL      CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80F, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_EXEC_INSTRUCTION           CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_CALL_KERNEL_API            CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_KERNEL_PROCESS_HIDING      CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_PREVIOUS_MODE_SWITCH       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_KERNEL_OPEN_HANDLE         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_KERNEL_MEMORY_ACCESS       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_GET_SYSTEM_TOKEN           CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_SET_INTERNAL_VARS          CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_IO                         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x809, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_AUTHORIZED_LIST            CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80A, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_CREATE_SYSTEM_THREAD       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80B, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_DIRECT_CREATE_DRIVER       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80C, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_MSR                        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80D, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_IRQL                       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80E, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_ARBITRARY_DRIVER_CALL      CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80F, METHOD_NEITHER, FILE_ANY_ACCESS)
 
 #define IOCTL_INDEX_EXEC_INSTRUCTION      0
 #define IOCTL_INDEX_CALL_KERNEL_API       1
@@ -154,7 +154,6 @@ typedef struct _KERNEL_MEMORY_ACCESS_INPUT {
     ULONG   Length;
     UCHAR   Operation;
     UCHAR   Reserved[3];
-    UCHAR   Data[1];
 } KERNEL_MEMORY_ACCESS_INPUT, *PKERNEL_MEMORY_ACCESS_INPUT;
 
 typedef struct _GET_SYSTEM_TOKEN_INPUT {
@@ -417,7 +416,7 @@ static ULONG        g_AuthMode = 0;
 static LIST_ENTRY   g_AuthListHead;
 static KSPIN_LOCK   g_AuthListLock;
 static ULONG g_VersionMajor    = 2;
-static ULONG g_VersionMinor    = 1;
+static ULONG g_VersionMinor    = 2;
 static ULONG g_VersionBuild    = 0;
 static ULONG g_VersionRevision = 0;
 static LIST_ENTRY   g_Win32kSsdtListHead;
@@ -2328,35 +2327,54 @@ NTSTATUS R0SimulateKernelProcessHiding(PVOID InputBuffer, ULONG InputSize,
 }
 
 NTSTATUS R0SimulateKernelMemoryAccess(PVOID InputBuffer, ULONG InputSize,
-                                      PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
+                                      PVOID OutputBuffer, ULONG OutputSize,
+                                      ULONG_PTR *Info)
 {
     PKERNEL_MEMORY_ACCESS_INPUT pIn;
-    PVOID target, dataBuffer;
-    NTSTATUS opStatus = STATUS_SUCCESS;
+    PVOID  target;
+    NTSTATUS status = STATUS_SUCCESS;
 
-    if (InputSize < sizeof(KERNEL_MEMORY_ACCESS_INPUT) || !InputBuffer)
+    if (!InputBuffer || InputSize < sizeof(KERNEL_MEMORY_ACCESS_INPUT))
+        return STATUS_INVALID_PARAMETER;
+    if (!OutputBuffer)
         return STATUS_INVALID_PARAMETER;
 
     pIn = (PKERNEL_MEMORY_ACCESS_INPUT)InputBuffer;
-    if (pIn->Length == 0 || (pIn->Operation != R0SKMA_OP_READ && pIn->Operation != R0SKMA_OP_WRITE))
-        return STATUS_INVALID_PARAMETER;
-    if (InputSize < sizeof(KERNEL_MEMORY_ACCESS_INPUT) + pIn->Length)
-        return STATUS_BUFFER_TOO_SMALL;
-    if (pIn->Operation == R0SKMA_OP_READ && OutputSize < sizeof(KERNEL_MEMORY_ACCESS_INPUT) + pIn->Length)
-        return STATUS_BUFFER_TOO_SMALL;
 
-    target = (PVOID)((ULONG_PTR)pIn->Address + pIn->Offset);
-    dataBuffer = pIn->Data;
+    if (pIn->Length == 0)
+        return STATUS_INVALID_PARAMETER;
+    if (pIn->Length > 0x1000000)
+        return STATUS_INVALID_PARAMETER;
+    if (OutputSize < pIn->Length)
+        return STATUS_BUFFER_TOO_SMALL;
+    if (pIn->Operation != R0SKMA_OP_READ && pIn->Operation != R0SKMA_OP_WRITE)
+        return STATUS_INVALID_PARAMETER;
+
+    if ((ULONG_PTR)pIn->Address > (ULONG_PTR)-1 - pIn->Offset)
+        return STATUS_INVALID_PARAMETER;
 
     __try {
-        if (pIn->Operation == R0SKMA_OP_READ) RtlCopyMemory(dataBuffer, target, pIn->Length);
-        else RtlCopyMemory(target, dataBuffer, pIn->Length);
-    } __except(EXCEPTION_EXECUTE_HANDLER) {
-        opStatus = GetExceptionCode();
+        if (pIn->Operation == R0SKMA_OP_READ)
+            ProbeForWrite(OutputBuffer, pIn->Length, 1);
+        else
+            ProbeForRead(OutputBuffer, pIn->Length, 1);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return GetExceptionCode();
     }
 
-    *Info = sizeof(KERNEL_MEMORY_ACCESS_INPUT) + pIn->Length;
-    return opStatus;
+    target = (PVOID)((ULONG_PTR)pIn->Address + pIn->Offset);
+    __try {
+        if (pIn->Operation == R0SKMA_OP_READ) {
+            RtlCopyMemory(OutputBuffer, target, pIn->Length);
+        } else {
+            RtlCopyMemory(target, OutputBuffer, pIn->Length);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        status = GetExceptionCode();
+    }
+
+    *Info = pIn->Length;
+    return status;
 }
 
 NTSTATUS R0SimulateGetSystemToken(PVOID InputBuffer, ULONG InputSize,
@@ -3403,10 +3421,12 @@ NTSTATUS R0SimulateDirectCreateDriver(PVOID InputBuffer, ULONG InputSize,
     PR0S_CREATE_DRIVER_INPUT pIn;
     PR0S_CREATE_DRIVER_OUTPUT pOut;
     UNICODE_STRING driverName;
-    WCHAR nameBuf[128];
-    ULONG nameChars;
+    PWCHAR kernelNameBuf = NULL;
+    ULONG  nameBytes;
+    BOOLEAN hasName;
 
     if (Info) *Info = 0;
+
     if (!InputBuffer || InputSize < sizeof(R0S_CREATE_DRIVER_INPUT))
         return STATUS_INVALID_PARAMETER;
     if (!OutputBuffer || OutputSize < sizeof(R0S_CREATE_DRIVER_OUTPUT))
@@ -3416,19 +3436,34 @@ NTSTATUS R0SimulateDirectCreateDriver(PVOID InputBuffer, ULONG InputSize,
     pOut = (PR0S_CREATE_DRIVER_OUTPUT)OutputBuffer;
     RtlZeroMemory(pOut, sizeof(*pOut));
 
-    if (pIn->InitFunction == 0) return STATUS_INVALID_PARAMETER;
+    if (pIn->InitFunction == 0)
+        return STATUS_INVALID_PARAMETER;
 
-    if (pIn->NameLength > 0) {
-        if (pIn->NameLength > sizeof(nameBuf))
+    hasName = (pIn->NameLength > 0);
+
+    if (hasName) {
+        if (pIn->NameLength > 512)
             return STATUS_INVALID_PARAMETER;
+
+        if (pIn->NameLength % sizeof(WCHAR) != 0)
+            return STATUS_INVALID_PARAMETER;
+
         if (InputSize < sizeof(R0S_CREATE_DRIVER_INPUT) + pIn->NameLength - sizeof(WCHAR))
             return STATUS_BUFFER_TOO_SMALL;
 
-        nameChars = pIn->NameLength / sizeof(WCHAR);
-        if (nameChars > 127) nameChars = 127;
-        RtlCopyMemory(nameBuf, pIn->Name, nameChars * sizeof(WCHAR));
-        nameBuf[nameChars] = L'\0';
-        RtlInitUnicodeString(&driverName, nameBuf);
+        nameBytes = pIn->NameLength + sizeof(WCHAR);
+
+        kernelNameBuf = (PWCHAR)ExAllocatePoolWithTag(
+                            NonPagedPool, nameBytes, 'NAM0');
+        if (!kernelNameBuf)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        RtlZeroMemory(kernelNameBuf, nameBytes);
+        RtlCopyMemory(kernelNameBuf, pIn->Name, pIn->NameLength);
+
+        kernelNameBuf[pIn->NameLength / sizeof(WCHAR)] = L'\0';
+
+        RtlInitUnicodeString(&driverName, kernelNameBuf);
     } else {
         driverName.Buffer        = NULL;
         driverName.Length        = 0;
@@ -3437,7 +3472,7 @@ NTSTATUS R0SimulateDirectCreateDriver(PVOID InputBuffer, ULONG InputSize,
 
     __try {
         status = IoCreateDriver(
-            (pIn->NameLength > 0) ? &driverName : NULL,
+            hasName ? &driverName : NULL,
             (PDRIVER_INITIALIZE)(ULONG_PTR)pIn->InitFunction);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         status = GetExceptionCode();
@@ -3697,6 +3732,7 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     NTSTATUS status = STATUS_SUCCESS;
     ULONG_PTR info = 0;
     ULONG code;
+    ULONG method;
     PVOID inputBuffer;
     ULONG inputSize;
     PVOID outputBuffer;
@@ -3706,11 +3742,14 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     UNREFERENCED_PARAMETER(DeviceObject);
 
     irpSp = IoGetCurrentIrpStackLocation(Irp);
-    code = irpSp->Parameters.DeviceIoControl.IoControlCode;
-    inputBuffer = Irp->AssociatedIrp.SystemBuffer;
-    inputSize = irpSp->Parameters.DeviceIoControl.InputBufferLength;
-    outputBuffer = Irp->AssociatedIrp.SystemBuffer;
+    code   = irpSp->Parameters.DeviceIoControl.IoControlCode;
+    method = METHOD_FROM_CTL_CODE(code);
+
+    inputSize  = irpSp->Parameters.DeviceIoControl.InputBufferLength;
     outputSize = irpSp->Parameters.DeviceIoControl.OutputBufferLength;
+
+    inputBuffer  = irpSp->Parameters.DeviceIoControl.Type3InputBuffer;
+    outputBuffer = Irp->UserBuffer;
 
     pTotalCount = (volatile LONG *)(&g_IoctlTotalCount);
     InterlockedIncrement(pTotalCount);
@@ -3761,26 +3800,20 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                     if (apiInput->ArgumentCount > 16) { status = STATUS_INVALID_PARAMETER; break; }
                     if (outputSize < sizeof(CALL_KERNEL_API_OUTPUT)) { status = STATUS_BUFFER_TOO_SMALL; break; }
 
-                    
                     if (apiInput->Flags & R0SIMULATE_FLAG_USE_ADDRESS) {
                         UINT64 addr = 0;
                         RtlCopyMemory(&addr, apiInput->ApiName, sizeof(addr));
                         apiAddress = (PVOID)(ULONG_PTR)addr;
                     }
-                    
                     else {
                         const WCHAR* name = apiInput->ApiName;
-
-                        
 
                         if (g_FunctionLookupMode == 2 || g_FunctionLookupMode == 3) {
                             BOOLEAN useWin32k = (g_FunctionLookupMode == 3);
 
-                            
                             if (IsNumberString(name)) {
                                 ULONG ssn = WcharToUlong(name);
                                 if (g_SsnTableSelect == 1) {
-                                    
                                     if (!g_Win32kSsdtBuilt) {
                                         status = BuildWin32kSsdtTable();
                                         if (!NT_SUCCESS(status)) break;
@@ -3789,7 +3822,6 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                                     if (we) apiAddress = (PVOID)(ULONG_PTR)we->Address;
                                     else    status = STATUS_NOT_FOUND;
                                 } else {
-                                    
                                     if (!g_SsdtBuilt) {
                                         status = BuildSsdtTable();
                                         if (!NT_SUCCESS(status)) break;
@@ -3799,7 +3831,6 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                                     else    status = STATUS_NOT_FOUND;
                                 }
                             }
-                            
                             else {
                                 if (useWin32k) {
                                     if (!g_Win32kSsdtBuilt) {
@@ -3820,9 +3851,7 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                                 }
                             }
                         }
-                        
                         else if (g_FunctionLookupMode == 4) {
-                            
                             if (!g_SsdtBuilt) {
                                 status = BuildSsdtTable();
                                 if (!NT_SUCCESS(status)) break;
@@ -3833,8 +3862,6 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                             }
 
                             if (IsNumberString(name)) {
-                                
-
                                 ULONG ssn = WcharToUlong(name);
                                 PSSDT_ENTRY ne = FindSsdtBySsn(ssn);
                                 if (ne) {
@@ -3846,7 +3873,6 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                                 }
                             }
                             else {
-                                
                                 PSSDT_ENTRY ne = FindSsdtByName(name);
                                 if (ne) {
                                     apiAddress = (PVOID)(ULONG_PTR)ne->Address;

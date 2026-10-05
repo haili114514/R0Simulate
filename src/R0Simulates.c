@@ -436,8 +436,7 @@ R0SIMULATES_API BOOL R0SimulateKernelOpenHandle(
 
 R0SIMULATES_API BOOL R0SimulateKernelMemoryAccess(UINT64 Address, ULONG Offset, ULONG Length, UCHAR Operation, PVOID Buffer) {
     BOOL result = FALSE;
-    SIZE_T totalSize;
-    PKERNEL_MEMORY_ACCESS_INPUT pIn;
+    KERNEL_MEMORY_ACCESS_INPUT in;
     IO_STATUS_BLOCK ioStatus;
     NTSTATUS status;
 
@@ -446,43 +445,34 @@ R0SIMULATES_API BOOL R0SimulateKernelMemoryAccess(UINT64 Address, ULONG Offset, 
         RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
+    if (Length > 0x1000000) {
+        RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
     if (Operation != R0SKMA_OP_READ && Operation != R0SKMA_OP_WRITE) {
         RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
 
-    totalSize = sizeof(KERNEL_MEMORY_ACCESS_INPUT) + Length;
-    pIn = (PKERNEL_MEMORY_ACCESS_INPUT)RtlAllocateHeap(R0_HEAP, HEAP_ZERO_MEMORY, totalSize);
-    if (!pIn) {
-        RtlSetLastWin32Error(ERROR_OUTOFMEMORY);
-        return FALSE;
-    }
-    pIn->Address   = Address;
-    pIn->Offset    = Offset;
-    pIn->Length    = Length;
-    pIn->Operation = Operation;
-    if (Operation == R0SKMA_OP_WRITE) {
-        memcpy(pIn->Data, Buffer, Length);
-    }
+    memset(&in, 0, sizeof(in));
+    in.Address   = Address;
+    in.Offset    = Offset;
+    in.Length    = Length;
+    in.Operation = Operation;
 
     memset(&ioStatus, 0, sizeof(ioStatus));
 
     status = NtDeviceIoControlFile(
         g_hDriver, NULL, NULL, NULL, &ioStatus,
         IOCTL_R0SIMULATE_KERNEL_MEMORY_ACCESS,
-        pIn, (ULONG)totalSize,
-        pIn, (ULONG)totalSize
+        &in, sizeof(in),
+        Buffer, Length
     );
 
     if (!NT_SUCCESS(status)) {
         RtlSetLastWin32Error(NtStatusToWin32Error(status));
-        RtlFreeHeap(R0_HEAP, 0, pIn);
         return FALSE;
     }
-    if (Operation == R0SKMA_OP_READ) {
-        memcpy(Buffer, pIn->Data, Length);
-    }
-    RtlFreeHeap(R0_HEAP, 0, pIn);
     RtlSetLastWin32Error(ERROR_SUCCESS);
     result = TRUE;
     return result;
