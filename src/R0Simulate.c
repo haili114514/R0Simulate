@@ -18,7 +18,7 @@
 #define IOCTL_R0SIMULATE_KERNEL_MEMORY_ACCESS       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_GET_SYSTEM_TOKEN           CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_SET_INTERNAL_VARS          CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_IO                         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x809, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_AUTHORIZED_LIST            CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80A, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_CREATE_SYSTEM_THREAD       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80B, METHOD_NEITHER, FILE_ANY_ACCESS)
@@ -3733,9 +3733,9 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     ULONG_PTR info = 0;
     ULONG code;
     ULONG method;
-    PVOID inputBuffer;
+    PVOID inputBuffer = NULL;
     ULONG inputSize;
-    PVOID outputBuffer;
+    PVOID outputBuffer = NULL;
     ULONG outputSize;
     volatile LONG *pTotalCount;
 
@@ -3748,8 +3748,18 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     inputSize  = irpSp->Parameters.DeviceIoControl.InputBufferLength;
     outputSize = irpSp->Parameters.DeviceIoControl.OutputBufferLength;
 
-    inputBuffer  = irpSp->Parameters.DeviceIoControl.Type3InputBuffer;
-    outputBuffer = Irp->UserBuffer;
+    method = METHOD_FROM_CTL_CODE(code);
+
+    if (method == METHOD_BUFFERED) {
+        inputBuffer  = Irp->AssociatedIrp.SystemBuffer;
+        outputBuffer = Irp->AssociatedIrp.SystemBuffer;
+     } else if (method == METHOD_NEITHER) {
+        inputBuffer  = irpSp->Parameters.DeviceIoControl.Type3InputBuffer;
+        outputBuffer = Irp->UserBuffer;
+    } else if (method == METHOD_IN_DIRECT || method == METHOD_OUT_DIRECT) {
+        inputBuffer  = Irp->AssociatedIrp.SystemBuffer;
+        outputBuffer = MmGetSystemAddressForMdlSafe(Irp->MdlAddress, NormalPagePriority);
+    }
 
     pTotalCount = (volatile LONG *)(&g_IoctlTotalCount);
     InterlockedIncrement(pTotalCount);
@@ -3800,11 +3810,13 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                     if (apiInput->ArgumentCount > 16) { status = STATUS_INVALID_PARAMETER; break; }
                     if (outputSize < sizeof(CALL_KERNEL_API_OUTPUT)) { status = STATUS_BUFFER_TOO_SMALL; break; }
 
+                    // 按地址调用
                     if (apiInput->Flags & R0SIMULATE_FLAG_USE_ADDRESS) {
                         UINT64 addr = 0;
                         RtlCopyMemory(&addr, apiInput->ApiName, sizeof(addr));
                         apiAddress = (PVOID)(ULONG_PTR)addr;
                     }
+                    // 按名称或 SSN 调用
                     else {
                         const WCHAR* name = apiInput->ApiName;
 
@@ -3816,84 +3828,97 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                                 if (g_SsnTableSelect == 1) {
                                     if (!g_Win32kSsdtBuilt) {
                                         status = BuildWin32kSsdtTable();
-                                        if (!NT_SUCCESS(status)) break;
                                     }
-                                    PWIN32K_SSDT_ENTRY we = FindWin32kSsdtBySsn(ssn);
-                                    if (we) apiAddress = (PVOID)(ULONG_PTR)we->Address;
-                                    else    status = STATUS_NOT_FOUND;
+                                    if (NT_SUCCESS(status)) {
+                                        PWIN32K_SSDT_ENTRY we = FindWin32kSsdtBySsn(ssn);
+                                        if (we) apiAddress = (PVOID)(ULONG_PTR)we->Address;
+                                        else    status = STATUS_NOT_FOUND;
+                                    }
                                 } else {
                                     if (!g_SsdtBuilt) {
                                         status = BuildSsdtTable();
-                                        if (!NT_SUCCESS(status)) break;
                                     }
-                                    PSSDT_ENTRY ne = FindSsdtBySsn(ssn);
-                                    if (ne) apiAddress = (PVOID)(ULONG_PTR)ne->Address;
-                                    else    status = STATUS_NOT_FOUND;
+                                    if (NT_SUCCESS(status)) {
+                                        PSSDT_ENTRY ne = FindSsdtBySsn(ssn);
+                                        if (ne) apiAddress = (PVOID)(ULONG_PTR)ne->Address;
+                                        else    status = STATUS_NOT_FOUND;
+                                    }
                                 }
                             }
                             else {
                                 if (useWin32k) {
                                     if (!g_Win32kSsdtBuilt) {
                                         status = BuildWin32kSsdtTable();
-                                        if (!NT_SUCCESS(status)) break;
                                     }
-                                    PWIN32K_SSDT_ENTRY we = FindWin32kSsdtByName(name);
-                                    if (we) apiAddress = (PVOID)(ULONG_PTR)we->Address;
-                                    else    status = STATUS_NOT_FOUND;
+                                    if (NT_SUCCESS(status)) {
+                                        PWIN32K_SSDT_ENTRY we = FindWin32kSsdtByName(name);
+                                        if (we) apiAddress = (PVOID)(ULONG_PTR)we->Address;
+                                        else    status = STATUS_NOT_FOUND;
+                                    }
                                 } else {
                                     if (!g_SsdtBuilt) {
                                         status = BuildSsdtTable();
-                                        if (!NT_SUCCESS(status)) break;
                                     }
-                                    PSSDT_ENTRY ne = FindSsdtByName(name);
-                                    if (ne) apiAddress = (PVOID)(ULONG_PTR)ne->Address;
-                                    else    status = STATUS_NOT_FOUND;
+                                    if (NT_SUCCESS(status)) {
+                                        PSSDT_ENTRY ne = FindSsdtByName(name);
+                                        if (ne) apiAddress = (PVOID)(ULONG_PTR)ne->Address;
+                                        else    status = STATUS_NOT_FOUND;
+                                    }
                                 }
                             }
                         }
                         else if (g_FunctionLookupMode == 4) {
                             if (!g_SsdtBuilt) {
                                 status = BuildSsdtTable();
-                                if (!NT_SUCCESS(status)) break;
                             }
-                            if (!g_Win32kSsdtBuilt) {
+                            if (NT_SUCCESS(status) && !g_Win32kSsdtBuilt) {
                                 status = BuildWin32kSsdtTable();
-                                if (!NT_SUCCESS(status)) break;
                             }
 
-                            if (IsNumberString(name)) {
-                                ULONG ssn = WcharToUlong(name);
-                                PSSDT_ENTRY ne = FindSsdtBySsn(ssn);
-                                if (ne) {
-                                    apiAddress = (PVOID)(ULONG_PTR)ne->Address;
-                                } else {
-                                    PWIN32K_SSDT_ENTRY we = FindWin32kSsdtBySsn(ssn);
-                                    if (we) apiAddress = (PVOID)(ULONG_PTR)we->Address;
-                                    else    status = STATUS_NOT_FOUND;
+                            if (NT_SUCCESS(status)) {
+                                if (IsNumberString(name)) {
+                                    ULONG ssn = WcharToUlong(name);
+                                    PSSDT_ENTRY ne = FindSsdtBySsn(ssn);
+                                    if (ne) {
+                                        apiAddress = (PVOID)(ULONG_PTR)ne->Address;
+                                    } else {
+                                        PWIN32K_SSDT_ENTRY we = FindWin32kSsdtBySsn(ssn);
+                                        if (we) apiAddress = (PVOID)(ULONG_PTR)we->Address;
+                                        else    status = STATUS_NOT_FOUND;
+                                    }
                                 }
-                            }
-                            else {
-                                PSSDT_ENTRY ne = FindSsdtByName(name);
-                                if (ne) {
-                                    apiAddress = (PVOID)(ULONG_PTR)ne->Address;
-                                } else {
-                                    PWIN32K_SSDT_ENTRY we = FindWin32kSsdtByName(name);
-                                    if (we) apiAddress = (PVOID)(ULONG_PTR)we->Address;
-                                    else    status = STATUS_NOT_FOUND;
+                                else {
+                                    PSSDT_ENTRY ne = FindSsdtByName(name);
+                                    if (ne) {
+                                        apiAddress = (PVOID)(ULONG_PTR)ne->Address;
+                                    } else {
+                                        PWIN32K_SSDT_ENTRY we = FindWin32kSsdtByName(name);
+                                        if (we) apiAddress = (PVOID)(ULONG_PTR)we->Address;
+                                        else    status = STATUS_NOT_FOUND;
+                                    }
                                 }
                             }
                         }
                         else if (g_FunctionLookupMode == 1) {
                             if (!g_FunctionTableBuilt) {
                                 KIRQL oldIrql;
+                                BOOLEAN needBuild = FALSE;
+
                                 KeAcquireSpinLock(&g_FunctionTableLock, &oldIrql);
-                                if (!g_FunctionTableBuilt) {
-                                    status = LazyBuildFunctionTable();
-                                    if (NT_SUCCESS(status)) g_FunctionTableBuilt = TRUE;
-                                }
+                                if (!g_FunctionTableBuilt) needBuild = TRUE;
                                 KeReleaseSpinLock(&g_FunctionTableLock, oldIrql);
+
+                                if (needBuild) {
+                                    status = LazyBuildFunctionTable();
+                                    if (NT_SUCCESS(status)) {
+                                        KeAcquireSpinLock(&g_FunctionTableLock, &oldIrql);
+                                        g_FunctionTableBuilt = TRUE;
+                                        KeReleaseSpinLock(&g_FunctionTableLock, oldIrql);
+                                    }
+                                }
                             }
-                            if (g_FunctionTableBuilt) {
+
+                            if (NT_SUCCESS(status) && g_FunctionTableBuilt) {
                                 UNICODE_STRING uniName;
                                 KIRQL oldIrql;
                                 PLIST_ENTRY pList;
@@ -3919,14 +3944,15 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                             if (!apiAddress) status = STATUS_NOT_FOUND;
                         }
                     }
-                    if (!NT_SUCCESS(status)) break;
 
-                    status = R0SimulateAPI(apiAddress, apiInput->ArgumentCount, apiInput->Arguments,
-                                           outputBuffer, outputSize, &returnValue);
-                    output = (PCALL_KERNEL_API_OUTPUT)outputBuffer;
-                    output->ReturnValue = returnValue;
-                    output->Status = status;
-                    info = sizeof(CALL_KERNEL_API_OUTPUT);
+                    if (NT_SUCCESS(status)) {
+                        status = R0SimulateAPI(apiAddress, apiInput->ArgumentCount, apiInput->Arguments,
+                                               outputBuffer, outputSize, &returnValue);
+                        output = (PCALL_KERNEL_API_OUTPUT)outputBuffer;
+                        output->ReturnValue = returnValue;
+                        output->Status = status;
+                        info = sizeof(CALL_KERNEL_API_OUTPUT);
+                    }
                 } __except(EXCEPTION_EXECUTE_HANDLER) { status = GetExceptionCode(); }
                 if (NT_SUCCESS(status)) g_IoctlCount[idx]++;
                 break;
@@ -4151,6 +4177,7 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         status = GetExceptionCode();
     }
 
+Complete:
     Irp->IoStatus.Status = status;
     Irp->IoStatus.Information = info;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
