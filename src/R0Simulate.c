@@ -2526,6 +2526,7 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
                 PVAR_TABLE_ENTRY e = CONTAINING_RECORD(p, VAR_TABLE_ENTRY, ListEntry);
                 UINT64 val = 0;
                 ULONG  bit = e->Id - 1;
+
                 if (R0S_ATTR_TEST(g_HideAttrDescriptor_Low, g_HideAttrDescriptor_High, bit)) {
                     p = p->Flink;
                     continue;
@@ -2534,17 +2535,13 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
                 pOutVar[idx].Id   = e->Id;
                 pOutVar[idx].Size = e->Size;
 
-                if (R0S_ATTR_TEST(g_ReadAttrDescriptor_Low, g_ReadAttrDescriptor_High, bit)) {
-                    val = 0xC0000022ULL;
-                } else {
-                    __try {
-                        if (e->Size == sizeof(ULONG))       val = *(ULONG*)e->Address;
-                        else if (e->Size == sizeof(UINT64)) val = *(UINT64*)e->Address;
-                        else RtlCopyMemory(&val, e->Address, e->Size);
-                    }
-                    __except (EXCEPTION_EXECUTE_HANDLER) {
-                        val = 0;
-                    }
+                __try {
+                    if (e->Size == sizeof(ULONG))       val = *(ULONG*)e->Address;
+                    else if (e->Size == sizeof(UINT64)) val = *(UINT64*)e->Address;
+                    else RtlCopyMemory(&val, e->Address, e->Size);
+                }
+                __except (EXCEPTION_EXECUTE_HANDLER) {
+                    val = 0;
                 }
 
                 pOutVar[idx].Value = val;
@@ -4177,7 +4174,6 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         status = GetExceptionCode();
     }
 
-Complete:
     Irp->IoStatus.Status = status;
     Irp->IoStatus.Information = info;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
