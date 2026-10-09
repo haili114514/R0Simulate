@@ -1053,7 +1053,8 @@ R0SIMULATES_API BOOL R0SimulateArbitraryDriverCall(
     ULONG  inputLength,
     PVOID  pOutBuffer,
     ULONG  outSize,
-    PULONG pInformation)
+    PULONG pInformation,
+    ULONG  requestorMode)
 {
     BOOL result = FALSE;
     SIZE_T totalInSize;
@@ -1084,7 +1085,10 @@ R0SIMULATES_API BOOL R0SimulateArbitraryDriverCall(
     pIn->IoControlCode = ioControlCode;
     pIn->InputLength   = inputLength;
     pIn->OutputLength  = outSize;
-    pIn->Reserved      = 0;
+
+    pIn->RequestorMode = (requestorMode == R0S_REQUESTOR_MODE_USER)
+                         ? R0S_REQUESTOR_MODE_USER
+                         : R0S_REQUESTOR_MODE_KERNEL;
 
     if (inputLength > 0) {
         memcpy(pIn->Data, pInputData, inputLength);

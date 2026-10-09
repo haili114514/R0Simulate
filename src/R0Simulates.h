@@ -108,6 +108,9 @@ extern "C" {
 #define R0SIRQL_OP_RAISE    0x02
 #define R0SIRQL_OP_LOWER    0x03
 
+#define R0S_REQUESTOR_MODE_KERNEL   0x00
+#define R0S_REQUESTOR_MODE_USER     0x01
+
 // ----- Structures -----
 typedef struct _EXEC_INSTRUCTION_INPUT {
     ULONG   InstructionSize;
@@ -310,7 +313,7 @@ typedef struct _R0S_CALL_DRIVER_INPUT {
     ULONG  IoControlCode;
     ULONG  InputLength;
     ULONG  OutputLength;
-    ULONG  Reserved;
+    ULONG  RequestorMode;
     UCHAR  Data[1];
 } R0S_CALL_DRIVER_INPUT, *PR0S_CALL_DRIVER_INPUT;
 
@@ -423,7 +426,8 @@ R0SIMULATES_API BOOL R0SimulateArbitraryDriverCall(
     ULONG  inputLength,
     PVOID  pOutBuffer,
     ULONG  outSize,
-    PULONG pInformation);
+    PULONG pInformation,
+    ULONG  requestorMode);
 
 #ifdef __cplusplus
 }
