@@ -84,6 +84,9 @@
 #define R0SKOH_TYPE_POINTER  1
 #define R0SKOH_TYPE_PID      2
 
+#define R0S_REQUESTOR_MODE_KERNEL   0x00UL
+#define R0S_REQUESTOR_MODE_USER     0x01UL
+
 #define R0S_ATTR_TEST(lo, hi, bit) \
     (((bit) < 64)  ? (((lo) & (1ULL << (bit))) != 0) : \
      ((bit) < 128) ? (((hi) & (1ULL << ((bit) - 64))) != 0) : FALSE)
@@ -365,7 +368,7 @@ typedef struct _R0S_CALL_DRIVER_INPUT {
     ULONG  IoControlCode;
     ULONG  InputLength;
     ULONG  OutputLength;
-    ULONG  Reserved;
+    ULONG  RequestorMode;
     UCHAR  Data[1];
 } R0S_CALL_DRIVER_INPUT, *PR0S_CALL_DRIVER_INPUT;
 
@@ -3679,6 +3682,16 @@ NTSTATUS R0SimulateArbitraryDriverCall(PVOID InputBuffer, ULONG InputSize,
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
+        /*
+         * 设置 RequestorMode：
+         * 用户态 DLL 已定义：
+         *   R0S_REQUESTOR_MODE_KERNEL  0x00
+         *   R0S_REQUESTOR_MODE_USER    0x01
+         * 这里直接映射到 KPROCESSOR_MODE。
+         */
+        pIrp->RequestorMode =
+            (pIn->RequestorMode == R0S_REQUESTOR_MODE_USER) ? UserMode : KernelMode;
+
         if (pIn->InputLength > 0 || pIn->OutputLength > 0) {
             ULONG bufLen = max(pIn->InputLength, pIn->OutputLength);
             sysBuffer = ExAllocatePoolWithTag(NonPagedPool, bufLen, 'IRPB');
@@ -3742,7 +3755,7 @@ NTSTATUS R0SimulateArbitraryDriverCall(PVOID InputBuffer, ULONG InputSize,
     if (pIrp) IoFreeIrp(pIrp);
     if (inputCopy) ExFreePoolWithTag(inputCopy, 'IRPI');
 
-    *Info = sizeof(R0S_CALL_DRIVER_OUTPUT) + ((status == STATUS_SUCCESS) ? 0 : 0);
+    *Info = sizeof(R0S_CALL_DRIVER_OUTPUT);
     return status;
 }
 
