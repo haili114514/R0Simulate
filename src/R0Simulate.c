@@ -84,9 +84,6 @@
 #define R0SKOH_TYPE_POINTER  1
 #define R0SKOH_TYPE_PID      2
 
-#define R0S_REQUESTOR_MODE_KERNEL   0x00
-#define R0S_REQUESTOR_MODE_USER     0x01
-
 #define R0S_ATTR_TEST(lo, hi, bit) \
     (((bit) < 64)  ? (((lo) & (1ULL << (bit))) != 0) : \
      ((bit) < 128) ? (((hi) & (1ULL << ((bit) - 64))) != 0) : FALSE)
@@ -102,6 +99,24 @@
         if      ((bit) < 64)  (lo) &= ~(1ULL << (bit)); \
         else if ((bit) < 128) (hi) &= ~(1ULL << ((bit) - 64)); \
     } while (0)
+
+#define R0S_TAG  "[R0Simulate] "
+
+#define R0S_LOG_IN(code, inSize, outSize, method) \
+    do { if (g_DebugMode) { \
+        DbgPrint(R0S_TAG "IN  code=0x%08X pid=0x%p tid=0x%p in=%u out=%u method=%u irql=%u\n", \
+                 (ULONG)(code), PsGetCurrentProcessId(), PsGetCurrentThreadId(), \
+                 (ULONG)(inSize), (ULONG)(outSize), (ULONG)(method), \
+                 (ULONG)KeGetCurrentIrql()); \
+    } } while (0)
+
+#define R0S_LOG_OUT(code, retStatus, retInfo, retValue) \
+    do { if (g_DebugMode) { \
+        DbgPrint(R0S_TAG "OUT code=0x%08X tid=0x%p status=0x%08X info=%u value=0x%I64X\n", \
+                 (ULONG)(code), PsGetCurrentThreadId(), \
+                 (ULONG)(retStatus), (ULONG)(retInfo), \
+                 (unsigned __int64)(retValue)); \
+    } } while (0)
 
 typedef struct _EXEC_INSTRUCTION_INPUT {
     ULONG   InstructionSize;
@@ -350,7 +365,7 @@ typedef struct _R0S_CALL_DRIVER_INPUT {
     ULONG  IoControlCode;
     ULONG  InputLength;
     ULONG  OutputLength;
-    ULONG  RequestorMode;
+    ULONG  Reserved;
     UCHAR  Data[1];
 } R0S_CALL_DRIVER_INPUT, *PR0S_CALL_DRIVER_INPUT;
 
@@ -419,13 +434,14 @@ static ULONG        g_AuthMode = 0;
 static LIST_ENTRY   g_AuthListHead;
 static KSPIN_LOCK   g_AuthListLock;
 static ULONG g_VersionMajor    = 2;
-static ULONG g_VersionMinor    = 2;
+static ULONG g_VersionMinor    = 4;
 static ULONG g_VersionBuild    = 0;
 static ULONG g_VersionRevision = 0;
 static LIST_ENTRY   g_Win32kSsdtListHead;
 static KSPIN_LOCK   g_Win32kSsdtListLock;
 static BOOLEAN      g_Win32kSsdtBuilt = FALSE;
 static ULONG        g_SsnTableSelect  = 0;
+static ULONG        g_DebugMode  = 0;
 
 NTKERNELAPI PPEB PsGetProcessPeb(PEPROCESS Process);
 NTKERNELAPI NTSTATUS ZwOpenProcessToken(HANDLE ProcessHandle, ACCESS_MASK DesiredAccess, PHANDLE TokenHandle);
@@ -801,6 +817,7 @@ static VOID RegisterAllVariables(VOID)
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_VersionMinor,    L"g_VersionMinor",    NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_VersionBuild,    L"g_VersionBuild",    NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_VersionRevision, L"g_VersionRevision", NULL);
+    R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_DebugMode, L"g_DebugMode", NULL);
 
     for (i = 0; i < 16; i++) {
         WCHAR name[32];
@@ -2529,7 +2546,6 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
                 PVAR_TABLE_ENTRY e = CONTAINING_RECORD(p, VAR_TABLE_ENTRY, ListEntry);
                 UINT64 val = 0;
                 ULONG  bit = e->Id - 1;
-
                 if (R0S_ATTR_TEST(g_HideAttrDescriptor_Low, g_HideAttrDescriptor_High, bit)) {
                     p = p->Flink;
                     continue;
@@ -2538,13 +2554,17 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
                 pOutVar[idx].Id   = e->Id;
                 pOutVar[idx].Size = e->Size;
 
-                __try {
-                    if (e->Size == sizeof(ULONG))       val = *(ULONG*)e->Address;
-                    else if (e->Size == sizeof(UINT64)) val = *(UINT64*)e->Address;
-                    else RtlCopyMemory(&val, e->Address, e->Size);
-                }
-                __except (EXCEPTION_EXECUTE_HANDLER) {
-                    val = 0;
+                if (R0S_ATTR_TEST(g_ReadAttrDescriptor_Low, g_ReadAttrDescriptor_High, bit)) {
+                    val = 0xC0000022ULL;
+                } else {
+                    __try {
+                        if (e->Size == sizeof(ULONG))       val = *(ULONG*)e->Address;
+                        else if (e->Size == sizeof(UINT64)) val = *(UINT64*)e->Address;
+                        else RtlCopyMemory(&val, e->Address, e->Size);
+                    }
+                    __except (EXCEPTION_EXECUTE_HANDLER) {
+                        val = 0;
+                    }
                 }
 
                 pOutVar[idx].Value = val;
@@ -3608,7 +3628,6 @@ NTSTATUS R0SimulateArbitraryDriverCall(PVOID InputBuffer, ULONG InputSize,
     ULONG               copyOut;
     BOOLEAN             isDeviceControl;
     PVOID               inputCopy = NULL;
-    KPROCESSOR_MODE     requestorMode;
 
     if (Info) *Info = 0;
     if (!InputBuffer || InputSize < sizeof(R0S_CALL_DRIVER_INPUT))
@@ -3635,10 +3654,6 @@ NTSTATUS R0SimulateArbitraryDriverCall(PVOID InputBuffer, ULONG InputSize,
             return STATUS_BUFFER_TOO_SMALL;
         }
 
-        
-        requestorMode = (pIn->RequestorMode == R0S_REQUESTOR_MODE_USER)
-                        ? UserMode : KernelMode;
-
         __try {
             pDriver = (PDRIVER_OBJECT)(ULONG_PTR)pIn->DriverObject;
             pDevice = pDriver->DeviceObject;
@@ -3663,9 +3678,6 @@ NTSTATUS R0SimulateArbitraryDriverCall(PVOID InputBuffer, ULONG InputSize,
             ExFreePoolWithTag(inputCopy, 'IRPI');
             return STATUS_INSUFFICIENT_RESOURCES;
         }
-
-        
-        pIrp->RequestorMode = requestorMode;
 
         if (pIn->InputLength > 0 || pIn->OutputLength > 0) {
             ULONG bufLen = max(pIn->InputLength, pIn->OutputLength);
@@ -3730,8 +3742,413 @@ NTSTATUS R0SimulateArbitraryDriverCall(PVOID InputBuffer, ULONG InputSize,
     if (pIrp) IoFreeIrp(pIrp);
     if (inputCopy) ExFreePoolWithTag(inputCopy, 'IRPI');
 
-    *Info = sizeof(R0S_CALL_DRIVER_OUTPUT);
+    *Info = sizeof(R0S_CALL_DRIVER_OUTPUT) + ((status == STATUS_SUCCESS) ? 0 : 0);
     return status;
+}
+
+static const char* R0S_FuncName(ULONG idx)
+{
+    switch (idx) {
+        case IOCTL_INDEX_EXEC_INSTRUCTION:      return "R0SimulateISA";
+        case IOCTL_INDEX_CALL_KERNEL_API:       return "R0SimulateAPI";
+        case IOCTL_INDEX_PROCESS_HIDING:        return "R0SimulateKernelProcessHiding";
+        case IOCTL_INDEX_PREVIOUS_MODE_SWITCH:  return "R0SimulatePreviousModeSwitch";
+        case IOCTL_INDEX_KERNEL_OPEN_HANDLE:    return "R0SimulateKernelOpenHandle";
+        case IOCTL_INDEX_KERNEL_MEMORY_ACCESS:  return "R0SimulateKernelMemoryAccess";
+        case IOCTL_INDEX_GET_SYSTEM_TOKEN:      return "R0SimulateGetSystemToken";
+        case IOCTL_INDEX_SET_INTERNAL_VARS:     return "R0SimulateSetInternalVariables";
+        case IOCTL_INDEX_GET_KERNEL_FUNCTION:   return "R0SimulateGetKernelFunction";
+        case IOCTL_INDEX_IO:                    return "R0SimulateIO";
+        case IOCTL_INDEX_AUTHORIZED_LIST:       return "R0SimulateAuthorizedList";
+        case IOCTL_INDEX_CREATE_SYSTEM_THREAD:  return "R0SimulateCreateSystemThread";
+        case IOCTL_INDEX_DIRECT_CREATE_DRIVER:  return "R0SimulateDirectCreateDriver";
+        case IOCTL_INDEX_MSR:                   return "R0SimulateMSR";
+        case IOCTL_INDEX_IRQL:                  return "R0SimulateIRQL";
+        case IOCTL_INDEX_ARBITRARY_DRIVER_CALL: return "R0SimulateArbitraryDriverCall";
+        default: return "Unknown";
+    }
+}
+
+static VOID R0S_LogIn(ULONG code, PVOID inputBuffer, ULONG inputSize)
+{
+    ULONG       rawIdx = (code >> 2) & 0xFFF;
+    ULONG       idx    = (rawIdx >= 0x800 && rawIdx <= 0x80F) ? (rawIdx - 0x800) : 0xFFFF;
+    const char* fn     = R0S_FuncName(idx);
+    PVOID       tid    = PsGetCurrentThreadId();
+    PVOID       pid    = PsGetCurrentProcessId();
+
+    if (!g_DebugMode) return;
+
+    __try {
+        switch (idx) {
+
+            case IOCTL_INDEX_EXEC_INSTRUCTION: {
+                if (!inputBuffer || inputSize < sizeof(EXEC_INSTRUCTION_INPUT))
+                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                PEXEC_INSTRUCTION_INPUT p = (PEXEC_INSTRUCTION_INPUT)inputBuffer;
+                DbgPrint("R0S IN  tid=%p pid=%p func=%s size=%u b0=%02X%02X%02X%02X\n",
+                         tid, pid, fn, p->InstructionSize,
+                         p->Instruction[0], p->Instruction[1],
+                         p->Instruction[2], p->Instruction[3]);
+                break;
+            }
+
+            case IOCTL_INDEX_CALL_KERNEL_API: {
+                if (!inputBuffer || inputSize < sizeof(CALL_KERNEL_API_INPUT))
+                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                PCALL_KERNEL_API_INPUT p = (PCALL_KERNEL_API_INPUT)inputBuffer;
+                WCHAR name[64] = {0};
+                if (!(p->Flags & R0SIMULATE_FLAG_USE_ADDRESS) &&
+                    p->ApiNameLength > 0 && p->ApiNameLength <= 512 &&
+                    inputSize >= sizeof(CALL_KERNEL_API_INPUT) + p->ApiNameLength) {
+                    ULONG n = p->ApiNameLength / sizeof(WCHAR);
+                    if (n >= 64) n = 63;
+                    RtlCopyMemory(name, p->ApiName, n * sizeof(WCHAR));
+                    name[n] = L'\0';
+                }
+                DbgPrint("R0S IN  tid=%p pid=%p func=%s argc=%u flags=0x%X a0=0x%I64X a1=0x%I64X a2=0x%I64X a3=0x%I64X name=%ws\n",
+                         tid, pid, fn, p->ArgumentCount, p->Flags,
+                         p->Arguments[0], p->Arguments[1],
+                         p->Arguments[2], p->Arguments[3], name);
+                break;
+            }
+
+            case IOCTL_INDEX_PROCESS_HIDING: {
+                if (!inputBuffer || inputSize < sizeof(PROCESS_HIDING_INPUT))
+                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                PPROCESS_HIDING_INPUT p = (PPROCESS_HIDING_INPUT)inputBuffer;
+                ULONG targetPid = 0;
+                if ((p->Operation == R0SKPH_OP_ADD || p->Operation == R0SKPH_OP_REMOVE) &&
+                    inputSize >= sizeof(PROCESS_HIDING_INPUT) + sizeof(ULONG)) {
+                    targetPid = *(ULONG*)((PUCHAR)inputBuffer + sizeof(PROCESS_HIDING_INPUT));
+                }
+                DbgPrint("R0S IN  tid=%p pid=%p func=%s op=0x%X targetPid=%u addr=0x%I64X len=%u\n",
+                         tid, pid, fn, p->Operation, targetPid, p->Address, p->Length);
+                break;
+            }
+
+            case IOCTL_INDEX_PREVIOUS_MODE_SWITCH: {
+                if (!inputBuffer || inputSize < sizeof(PREVIOUS_MODE_SWITCH_INPUT))
+                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                PPREVIOUS_MODE_SWITCH_INPUT p = (PPREVIOUS_MODE_SWITCH_INPUT)inputBuffer;
+                DbgPrint("R0S IN  tid=%p pid=%p func=%s mode=%u viewOnly=%u\n",
+                         tid, pid, fn, p->Mode, p->ViewOnly);
+                break;
+            }
+
+            case IOCTL_INDEX_KERNEL_OPEN_HANDLE: {
+                if (!inputBuffer || inputSize < sizeof(KERNEL_OPEN_HANDLE_INPUT))
+                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                PKERNEL_OPEN_HANDLE_INPUT p = (PKERNEL_OPEN_HANDLE_INPUT)inputBuffer;
+                DbgPrint("R0S IN  tid=%p pid=%p func=%s type=%u access=0x%X target=0x%I64X mode=%u attr=0x%X obj=0x%I64X\n",
+                         tid, pid, fn, p->Type, p->DesiredAccess, p->Target,
+                         p->AccessMode, p->HandleAttributes, p->ObjectType);
+                break;
+            }
+
+            case IOCTL_INDEX_KERNEL_MEMORY_ACCESS: {
+                if (!inputBuffer || inputSize < sizeof(KERNEL_MEMORY_ACCESS_INPUT))
+                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                PKERNEL_MEMORY_ACCESS_INPUT p = (PKERNEL_MEMORY_ACCESS_INPUT)inputBuffer;
+                DbgPrint("R0S IN  tid=%p pid=%p func=%s op=%u addr=0x%I64X off=0x%X len=%u\n",
+                         tid, pid, fn, p->Operation, p->Address, p->Offset, p->Length);
+                break;
+            }
+
+            case IOCTL_INDEX_GET_SYSTEM_TOKEN: {
+                if (!inputBuffer || inputSize < sizeof(GET_SYSTEM_TOKEN_INPUT))
+                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                PGET_SYSTEM_TOKEN_INPUT p = (PGET_SYSTEM_TOKEN_INPUT)inputBuffer;
+                DbgPrint("R0S IN  tid=%p pid=%p func=%s replace=%u\n",
+                         tid, pid, fn, p->ReplaceToken);
+                break;
+            }
+
+            case IOCTL_INDEX_SET_INTERNAL_VARS: {
+                if (!inputBuffer || inputSize < sizeof(SET_INTERNAL_VAR_INPUT))
+                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                PSET_INTERNAL_VAR_INPUT p = (PSET_INTERNAL_VAR_INPUT)inputBuffer;
+                WCHAR name[64] = {0};
+                if (p->NameLength > 0 && p->NameLength <= 512 &&
+                    inputSize >= sizeof(SET_INTERNAL_VAR_INPUT) + p->NameLength) {
+                    ULONG n = p->NameLength / sizeof(WCHAR);
+                    if (n >= 64) n = 63;
+                    RtlCopyMemory(name, (PUCHAR)inputBuffer + sizeof(SET_INTERNAL_VAR_INPUT),
+                                  n * sizeof(WCHAR));
+                    name[n] = L'\0';
+                }
+                DbgPrint("R0S IN  tid=%p pid=%p func=%s op=0x%X id=%u value=0x%I64X name=%ws\n",
+                         tid, pid, fn, p->Operation, p->VariableId, p->Value, name);
+                break;
+            }
+
+            case IOCTL_INDEX_GET_KERNEL_FUNCTION: {
+                if (!inputBuffer || inputSize < sizeof(ULONG))
+                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                ULONG nameLen = *(ULONG*)inputBuffer;
+                WCHAR name[64] = {0};
+                if (nameLen > 0 && nameLen <= 512 &&
+                    inputSize >= sizeof(GET_KERNEL_FUNCTION_INPUT) + nameLen - 1) {
+                    ULONG n = nameLen / sizeof(WCHAR);
+                    if (n >= 64) n = 63;
+                    RtlCopyMemory(name, (PUCHAR)inputBuffer + sizeof(ULONG), n * sizeof(WCHAR));
+                    name[n] = L'\0';
+                }
+                DbgPrint("R0S IN  tid=%p pid=%p func=%s nameLen=%u name=%ws\n",
+                         tid, pid, fn, nameLen, name);
+                break;
+            }
+
+            case IOCTL_INDEX_IO: {
+                if (!inputBuffer || inputSize < sizeof(R0S_IO_INPUT))
+                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                PR0S_IO_INPUT p = (PR0S_IO_INPUT)inputBuffer;
+                DbgPrint("R0S IN  tid=%p pid=%p func=%s op=0x%X port=0x%X value=0x%X\n",
+                         tid, pid, fn, p->Operation, p->Port, p->Value);
+                break;
+            }
+
+            case IOCTL_INDEX_AUTHORIZED_LIST: {
+                if (!inputBuffer || inputSize < sizeof(R0S_AUTH_LIST_INPUT))
+                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                PR0S_AUTH_LIST_INPUT p = (PR0S_AUTH_LIST_INPUT)inputBuffer;
+                DbgPrint("R0S IN  tid=%p pid=%p func=%s op=0x%X pid=%u\n",
+                         tid, pid, fn, p->Operation, p->Pid);
+                break;
+            }
+
+            case IOCTL_INDEX_CREATE_SYSTEM_THREAD: {
+                if (!inputBuffer || inputSize < sizeof(R0S_CREATE_THREAD_INPUT))
+                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                PR0S_CREATE_THREAD_INPUT p = (PR0S_CREATE_THREAD_INPUT)inputBuffer;
+                DbgPrint("R0S IN  tid=%p pid=%p func=%s routine=0x%I64X ctx=0x%I64X access=0x%X\n",
+                         tid, pid, fn, p->StartRoutine, p->StartContext, p->DesiredAccess);
+                break;
+            }
+
+            case IOCTL_INDEX_DIRECT_CREATE_DRIVER: {
+                if (!inputBuffer || inputSize < sizeof(R0S_CREATE_DRIVER_INPUT))
+                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                PR0S_CREATE_DRIVER_INPUT p = (PR0S_CREATE_DRIVER_INPUT)inputBuffer;
+                WCHAR name[64] = {0};
+                if (p->NameLength > 0 && p->NameLength <= 512) {
+                    ULONG n = p->NameLength / sizeof(WCHAR);
+                    if (n >= 64) n = 63;
+                    RtlCopyMemory(name, p->Name, n * sizeof(WCHAR));
+                    name[n] = L'\0';
+                }
+                DbgPrint("R0S IN  tid=%p pid=%p func=%s init=0x%I64X nameLen=%u name=%ws\n",
+                         tid, pid, fn, p->InitFunction, p->NameLength, name);
+                break;
+            }
+
+            case IOCTL_INDEX_MSR: {
+                if (!inputBuffer || inputSize < sizeof(R0S_MSR_INPUT))
+                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                PR0S_MSR_INPUT p = (PR0S_MSR_INPUT)inputBuffer;
+                DbgPrint("R0S IN  tid=%p pid=%p func=%s op=0x%X msr=0x%X value=0x%I64X\n",
+                         tid, pid, fn, p->Operation, p->Msr, p->Value);
+                break;
+            }
+
+            case IOCTL_INDEX_IRQL: {
+                if (!inputBuffer || inputSize < sizeof(R0S_IRQL_INPUT))
+                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                PR0S_IRQL_INPUT p = (PR0S_IRQL_INPUT)inputBuffer;
+                DbgPrint("R0S IN  tid=%p pid=%p func=%s op=0x%X targetIrql=%u\n",
+                         tid, pid, fn, p->Operation, p->TargetIrql);
+                break;
+            }
+
+            case IOCTL_INDEX_ARBITRARY_DRIVER_CALL: {
+                if (!inputBuffer || inputSize < sizeof(R0S_CALL_DRIVER_INPUT))
+                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                PR0S_CALL_DRIVER_INPUT p = (PR0S_CALL_DRIVER_INPUT)inputBuffer;
+                DbgPrint("R0S IN  tid=%p pid=%p func=%s drv=0x%I64X mj=0x%X mn=0x%X ioctl=0x%X inLen=%u outLen=%u\n",
+                         tid, pid, fn, p->DriverObject, p->MajorFunction, p->MinorFunction,
+                         p->IoControlCode, p->InputLength, p->OutputLength);
+                break;
+            }
+
+            default:
+                DbgPrint("R0S IN  tid=%p pid=%p func=%s code=0x%08X in=%u out=%u\n",
+                         tid, pid, fn, code, inputSize, inputSize);
+                break;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        DbgPrint("R0S IN  tid=%p pid=%p func=%s <fault 0x%08X>\n",
+                 tid, pid, fn, GetExceptionCode());
+    }
+}
+
+static VOID R0S_LogOut(ULONG code, NTSTATUS status, ULONG_PTR info,
+                       PVOID outputBuffer, ULONG outputSize)
+{
+    ULONG       rawIdx = (code >> 2) & 0xFFF;
+    ULONG       idx    = (rawIdx >= 0x800 && rawIdx <= 0x80F) ? (rawIdx - 0x800) : 0xFFFF;
+    const char* fn     = R0S_FuncName(idx);
+    PVOID       tid    = PsGetCurrentThreadId();
+    PVOID       pid    = PsGetCurrentProcessId();
+
+    if (!g_DebugMode) return;
+
+    __try {
+        switch (idx) {
+
+            case IOCTL_INDEX_EXEC_INSTRUCTION: {
+                UINT64 ret = 0; NTSTATUS st = status;
+                if (outputBuffer && outputSize >= sizeof(EXEC_INSTRUCTION_OUTPUT)) {
+                    PEXEC_INSTRUCTION_OUTPUT p = (PEXEC_INSTRUCTION_OUTPUT)outputBuffer;
+                    ret = p->ReturnValue; st = (NTSTATUS)p->Status;
+                }
+                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X ret=0x%I64X info=%u\n",
+                         tid, pid, fn, (ULONG)st, ret, (ULONG)info);
+                break;
+            }
+
+            case IOCTL_INDEX_CALL_KERNEL_API: {
+                UINT64 ret = 0; NTSTATUS st = status;
+                if (outputBuffer && outputSize >= sizeof(CALL_KERNEL_API_OUTPUT)) {
+                    PCALL_KERNEL_API_OUTPUT p = (PCALL_KERNEL_API_OUTPUT)outputBuffer;
+                    ret = p->ReturnValue; st = (NTSTATUS)p->Status;
+                }
+                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X ret=0x%I64X info=%u\n",
+                         tid, pid, fn, (ULONG)st, ret, (ULONG)info);
+                break;
+            }
+
+            case IOCTL_INDEX_PROCESS_HIDING: {
+                NTSTATUS st = status;
+                if (outputBuffer && outputSize >= sizeof(NTSTATUS))
+                    st = *(NTSTATUS*)outputBuffer;
+                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X info=%u\n",
+                         tid, pid, fn, (ULONG)st, (ULONG)info);
+                break;
+            }
+
+            case IOCTL_INDEX_PREVIOUS_MODE_SWITCH: {
+                UCHAR oldM = 0, newM = 0; NTSTATUS st = status;
+                if (outputBuffer && outputSize >= sizeof(PREVIOUS_MODE_SWITCH_OUTPUT)) {
+                    PPREVIOUS_MODE_SWITCH_OUTPUT p = (PPREVIOUS_MODE_SWITCH_OUTPUT)outputBuffer;
+                    oldM = p->OldMode; newM = p->NewMode; st = (NTSTATUS)p->Status;
+                }
+                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X old=%u new=%u info=%u\n",
+                         tid, pid, fn, (ULONG)st, oldM, newM, (ULONG)info);
+                break;
+            }
+
+            case IOCTL_INDEX_KERNEL_OPEN_HANDLE: {
+                HANDLE handle = NULL; NTSTATUS st = status; PVOID kptr = NULL; ULONG type = 0;
+                if (outputBuffer && outputSize >= sizeof(KERNEL_OPEN_HANDLE_OUTPUT)) {
+                    PKERNEL_OPEN_HANDLE_OUTPUT p = (PKERNEL_OPEN_HANDLE_OUTPUT)outputBuffer;
+                    handle = p->ResultHandle; st = (NTSTATUS)p->Status;
+                    kptr = p->KernelPointer; type = p->Type;
+                }
+                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X handle=%p type=%u kptr=%p info=%u\n",
+                         tid, pid, fn, (ULONG)st, handle, type, kptr, (ULONG)info);
+                break;
+            }
+
+            case IOCTL_INDEX_KERNEL_MEMORY_ACCESS: {
+                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X bytes=%u\n",
+                         tid, pid, fn, (ULONG)status, (ULONG)info);
+                break;
+            }
+
+            case IOCTL_INDEX_GET_SYSTEM_TOKEN: {
+                HANDLE h = NULL; NTSTATUS st = status;
+                if (outputBuffer && outputSize >= sizeof(GET_SYSTEM_TOKEN_OUTPUT)) {
+                    PGET_SYSTEM_TOKEN_OUTPUT p = (PGET_SYSTEM_TOKEN_OUTPUT)outputBuffer;
+                    h = p->TokenHandle; st = (NTSTATUS)p->Status;
+                }
+                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X token=%p info=%u\n",
+                         tid, pid, fn, (ULONG)st, h, (ULONG)info);
+                break;
+            }
+
+            case IOCTL_INDEX_SET_INTERNAL_VARS:
+            case IOCTL_INDEX_GET_KERNEL_FUNCTION:
+            case IOCTL_INDEX_AUTHORIZED_LIST: {
+                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X info=%u\n",
+                         tid, pid, fn, (ULONG)status, (ULONG)info);
+                break;
+            }
+
+            case IOCTL_INDEX_IO: {
+                ULONG val = 0; NTSTATUS st = status;
+                if (outputBuffer && outputSize >= sizeof(R0S_IO_OUTPUT)) {
+                    PR0S_IO_OUTPUT p = (PR0S_IO_OUTPUT)outputBuffer;
+                    val = p->Value; st = (NTSTATUS)p->Status;
+                }
+                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X value=0x%X info=%u\n",
+                         tid, pid, fn, (ULONG)st, val, (ULONG)info);
+                break;
+            }
+
+            case IOCTL_INDEX_CREATE_SYSTEM_THREAD: {
+                HANDLE h = NULL; NTSTATUS st = status;
+                if (outputBuffer && outputSize >= sizeof(R0S_CREATE_THREAD_OUTPUT)) {
+                    PR0S_CREATE_THREAD_OUTPUT p = (PR0S_CREATE_THREAD_OUTPUT)outputBuffer;
+                    h = p->ThreadHandle; st = (NTSTATUS)p->Status;
+                }
+                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X thread=%p info=%u\n",
+                         tid, pid, fn, (ULONG)st, h, (ULONG)info);
+                break;
+            }
+
+            case IOCTL_INDEX_DIRECT_CREATE_DRIVER: {
+                UINT64 drv = 0; NTSTATUS st = status;
+                if (outputBuffer && outputSize >= sizeof(R0S_CREATE_DRIVER_OUTPUT)) {
+                    PR0S_CREATE_DRIVER_OUTPUT p = (PR0S_CREATE_DRIVER_OUTPUT)outputBuffer;
+                    drv = p->DriverObject; st = (NTSTATUS)p->Status;
+                }
+                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X drvObj=0x%I64X info=%u\n",
+                         tid, pid, fn, (ULONG)st, drv, (ULONG)info);
+                break;
+            }
+
+            case IOCTL_INDEX_MSR: {
+                UINT64 val = 0; NTSTATUS st = status;
+                if (outputBuffer && outputSize >= sizeof(R0S_MSR_OUTPUT)) {
+                    PR0S_MSR_OUTPUT p = (PR0S_MSR_OUTPUT)outputBuffer;
+                    val = p->Value; st = (NTSTATUS)p->Status;
+                }
+                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X value=0x%I64X info=%u\n",
+                         tid, pid, fn, (ULONG)st, val, (ULONG)info);
+                break;
+            }
+
+            case IOCTL_INDEX_IRQL: {
+                UCHAR oldI = 0, newI = 0; NTSTATUS st = status;
+                if (outputBuffer && outputSize >= sizeof(R0S_IRQL_OUTPUT)) {
+                    PR0S_IRQL_OUTPUT p = (PR0S_IRQL_OUTPUT)outputBuffer;
+                    oldI = p->OldIrql; newI = p->NewIrql; st = (NTSTATUS)p->Status;
+                }
+                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X oldIrql=%u newIrql=%u info=%u\n",
+                         tid, pid, fn, (ULONG)st, oldI, newI, (ULONG)info);
+                break;
+            }
+
+            case IOCTL_INDEX_ARBITRARY_DRIVER_CALL: {
+                NTSTATUS st = status; ULONG drvInfo = 0;
+                if (outputBuffer && outputSize >= sizeof(R0S_CALL_DRIVER_OUTPUT)) {
+                    PR0S_CALL_DRIVER_OUTPUT p = (PR0S_CALL_DRIVER_OUTPUT)outputBuffer;
+                    st = (NTSTATUS)p->Status; drvInfo = p->Information;
+                }
+                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X drvStatus=0x%08X drvInfo=%u info=%u\n",
+                         tid, pid, fn, (ULONG)status, (ULONG)st, drvInfo, (ULONG)info);
+                break;
+            }
+
+            default:
+                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X info=%u\n",
+                         tid, pid, fn, (ULONG)status, (ULONG)info);
+                break;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X info=%u <fault>\n",
+                 tid, pid, fn, (ULONG)status, (ULONG)info);
+    }
 }
 
 NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
@@ -3771,6 +4188,8 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 
     pTotalCount = (volatile LONG *)(&g_IoctlTotalCount);
     InterlockedIncrement(pTotalCount);
+
+    R0S_LogIn(code, inputBuffer, inputSize);
 
     __try {
         switch (code) {
@@ -4184,6 +4603,8 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     } __except(EXCEPTION_EXECUTE_HANDLER) {
         status = GetExceptionCode();
     }
+
+    R0S_LogOut(code, status, info, outputBuffer, outputSize);
 
     Irp->IoStatus.Status = status;
     Irp->IoStatus.Information = info;
