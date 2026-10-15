@@ -520,63 +520,21 @@ kma_done:
     printf("[10] IOCTL_R0SIMULATE_KERNEL_OPEN_HANDLE (R0S KOH) - handle/pointer conversion (unsafe demo)\n");
     {
         ULONG pid = GetCurrentProcessId();
-        KERNEL_OPEN_HANDLE_OUTPUT out = {0};
+        KERNEL_OPEN_HANDLE_OUTPUT out  = {0};
         KERNEL_OPEN_HANDLE_OUTPUT out2 = {0};
         HANDLE hProcess = NULL;
         BOOL ok;
 
-        printf("  [10.1] Open handle to current process by PID (PID=%lu)\n", pid);
-        ok = R0SimulateKernelOpenHandle(
-            R0SKOH_TYPE_PID,
-            PROCESS_ALL_ACCESS,
-            (UINT64)pid,
-            R0SKOH_ACCESS_MODE_KERNEL,
-            OBJ_KERNEL_HANDLE,
-            0,
-            &out
-        );
-        if (ok && NT_SUCCESS(out.Status) && out.ResultHandle != NULL)
-        {
-            printf("      OK: got handle = %p\n", out.ResultHandle);
-            CloseHandle(out.ResultHandle);
-            printf("      Handle closed\n");
-        }
-        else
-        {
-            print_last_error("R0S KOH open current process by PID");
-        }
-
-        printf("  [10.2] Open handle to system process (PID=4)\n");
-        ok = R0SimulateKernelOpenHandle(
-            R0SKOH_TYPE_PID,
-            PROCESS_QUERY_INFORMATION,
-            (UINT64)4,
-            R0SKOH_ACCESS_MODE_KERNEL,
-            OBJ_KERNEL_HANDLE,
-            0,
-            &out
-        );
-        if (ok && NT_SUCCESS(out.Status) && out.ResultHandle != NULL)
-        {
-            printf("      OK: got handle = %p\n", out.ResultHandle);
-            CloseHandle(out.ResultHandle);
-            printf("      Handle closed\n");
-        }
-        else
-        {
-            print_last_error("R0S KOH open system process");
-        }
-
-        printf("  [10.3] Open a real handle to the current process with OpenProcess\n");
+        printf("  [10.1] Open a real handle to the current process with OpenProcess\n");
         hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pid);
         if (hProcess == NULL)
         {
-            print_last_error("OpenProcess");
+            print_last_error("OpenProcess current");
             goto test10_end;
         }
         printf("      OK: hProcess = %p\n", hProcess);
 
-        printf("  [10.4] Convert handle to kernel pointer (Type=R0SKOH_TYPE_HANDLE)\n");
+        printf("  [10.2] Convert handle to kernel pointer (Type=R0SKOH_TYPE_HANDLE)\n");
         ok = R0SimulateKernelOpenHandle(
             R0SKOH_TYPE_HANDLE,
             PROCESS_QUERY_INFORMATION,
@@ -595,7 +553,7 @@ kma_done:
         printf("      OK: KernelPointer = 0x%p\n", out.KernelPointer);
         printf("      Warning: this pointer was dereferenced in kernel and is now dangling.\n");
 
-        printf("  [10.5] Convert kernel pointer back to handle (Type=R0SKOH_TYPE_POINTER)\n");
+        printf("  [10.3] Convert kernel pointer back to handle (Type=R0SKOH_TYPE_POINTER)\n");
         printf("      Warning: unsafe operation, may cause a bugcheck. Demo only.\n");
         ok = R0SimulateKernelOpenHandle(
             R0SKOH_TYPE_POINTER,
@@ -705,7 +663,7 @@ test10_end:
         execAddr = R0SimulateAPI(
             L"ExAllocatePoolWithTag",
             3, 0,
-            (UINT64)0x00000000,   /* NonPagedPoolExecute */
+            (UINT64)0x00000000,   
             (UINT64)64,
             tag_DEMO
         );
@@ -756,7 +714,7 @@ thread_done:
     {
         UINT64 value = 0;
         BOOL   ok;
-        /* IA32_LSTAR - KiSystemCall64 address */
+        
         ULONG  targetMsr = 0xC0000082;
 
         printf("  [13.1] Read MSR 0x%08X (IA32_LSTAR)\n", targetMsr);
@@ -766,7 +724,7 @@ thread_done:
         else
             print_last_error("R0S MSR read");
 
-        /* read another one */
+        
         printf("  [13.2] Read MSR 0xC0000100 (IA32_FS_BASE)\n");
         ok = R0SimulateMSR(R0SMSR_OP_READ, 0xC0000100, 0, &value);
         if (ok)
@@ -794,7 +752,7 @@ thread_done:
     {
         UINT64 driverObject = 0;
         BOOL   ok;
-        UCHAR  inData[8]  = {0};
+        UCHAR  inData[8]   = {0};
         UCHAR  outData[64] = {0};
         ULONG  info = 0;
 
@@ -818,12 +776,13 @@ thread_done:
         printf("  [15.2] Send IRP_MJ_CREATE to the driver\n");
         ok = R0SimulateArbitraryDriverCall(
             driverObject,
-            IRP_MJ_CREATE,      /* 0x00 */
+            IRP_MJ_CREATE,
             0,
             0,
             inData, sizeof(inData),
             outData, sizeof(outData),
-            &info
+            &info,
+            R0S_REQUESTOR_MODE_KERNEL
         );
         if (!ok)
         {
@@ -839,13 +798,14 @@ thread_done:
         memset(outData, 0, sizeof(outData));
         SetLastError(0);
         ok = R0SimulateArbitraryDriverCall(
-            0,                  /* NULL driver object */
-            IRP_MJ_CLEANUP,     /* 0x12 */
+            0,
+            IRP_MJ_CLEANUP,
             0,
             0,
             inData, sizeof(inData),
             outData, sizeof(outData),
-            &info
+            &info,
+            R0S_REQUESTOR_MODE_KERNEL
         );
         if (!ok)
         {
