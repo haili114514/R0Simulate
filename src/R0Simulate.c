@@ -82,7 +82,6 @@
 
 #define R0SKOH_TYPE_HANDLE   0
 #define R0SKOH_TYPE_POINTER  1
-#define R0SKOH_TYPE_PID      2
 
 #define R0S_REQUESTOR_MODE_KERNEL   0x00UL
 #define R0S_REQUESTOR_MODE_USER     0x01UL
@@ -437,7 +436,7 @@ static ULONG        g_AuthMode = 0;
 static LIST_ENTRY   g_AuthListHead;
 static KSPIN_LOCK   g_AuthListLock;
 static ULONG g_VersionMajor    = 2;
-static ULONG g_VersionMinor    = 4;
+static ULONG g_VersionMinor    = 5;
 static ULONG g_VersionBuild    = 0;
 static ULONG g_VersionRevision = 0;
 static LIST_ENTRY   g_Win32kSsdtListHead;
@@ -844,6 +843,14 @@ static VOID RegisterAllVariables(VOID)
     R0sRegisterVariable(sizeof(PVOID),   (PVOID)(ULONG_PTR)&g_Win32kSsdtListHead.Blink, L"g_Win32kSsdtListHead.Blink", NULL);
     R0sRegisterVariable(sizeof(PVOID),   (PVOID)(ULONG_PTR)&g_Win32kSsdtListLock,       L"g_Win32kSsdtListLock",       NULL);
     R0sRegisterVariable(sizeof(BOOLEAN), (PVOID)(ULONG_PTR)&g_Win32kSsdtBuilt,          L"g_Win32kSsdtBuilt",          NULL);
+
+    
+    if (g_DeviceObject != NULL) {
+        R0sRegisterVariable(sizeof(LONG),
+                            (PVOID)(ULONG_PTR)&g_DeviceObject->ReferenceCount,
+                            L"g_DeviceRefCount",
+                            NULL);
+    }
 }
 
 static BOOLEAN R0sIsCallerAuthorized(VOID)
@@ -1884,7 +1891,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         KeInitializeSpinLock(&g_SsdtListLock);
         g_SsdtBuilt = FALSE;
 
-        
         InitializeListHead(&g_Win32kSsdtListHead);
         KeInitializeSpinLock(&g_Win32kSsdtListLock);
         g_Win32kSsdtBuilt = FALSE;
@@ -1988,7 +1994,6 @@ VOID DriverUnload(PDRIVER_OBJECT DriverObject)
         KeReleaseSpinLock(&g_SsdtListLock, oldIrql);
     } __except(EXCEPTION_EXECUTE_HANDLER) { }
 
-    
     __try {
         KeAcquireSpinLock(&g_Win32kSsdtListLock, &oldIrql);
         pList = g_Win32kSsdtListHead.Flink;
@@ -2649,7 +2654,6 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
     NTSTATUS status = STATUS_SUCCESS;
     KIRQL oldIrql;
 
-    
     if (g_GetFunctionMode == 0) {
         if (!g_FunctionTableBuilt) {
             BOOLEAN needBuild = FALSE;
@@ -2770,7 +2774,6 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
         }
     }
 
-    
     if (g_GetFunctionMode == 1) {
         if (!g_SsdtBuilt) {
             status = BuildSsdtTable();
@@ -2856,7 +2859,6 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
         }
     }
 
-    
     if (g_GetFunctionMode == 2) {
         if (!g_Win32kSsdtBuilt) {
             status = BuildWin32kSsdtTable();
@@ -2943,7 +2945,6 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
         }
     }
 
-    
     if (g_GetFunctionMode == 3) {
         if (!g_SsdtBuilt) {
             status = BuildSsdtTable();
@@ -3115,7 +3116,6 @@ NTSTATUS R0SimulateKernelOpenHandle(PVOID InputBuffer, ULONG InputSize,
     POBJECT_TYPE               objType       = NULL;
     PVOID                      referencedObj = NULL;
     HANDLE                     resultHandle  = NULL;
-    PEPROCESS                  pProcess      = NULL;
     PVOID                      pObject       = NULL;
 
     if (Info) *Info = 0;
@@ -3173,34 +3173,6 @@ NTSTATUS R0SimulateKernelOpenHandle(PVOID InputBuffer, ULONG InputSize,
             out.Status              = status;
             out.KernelPointer       = pObject;
             out.Type                = R0SKOH_TYPE_POINTER;
-            out.Reserved            = 0;
-        }
-        else if (in.Type == R0SKOH_TYPE_PID) {
-            ULONG pid = (ULONG)(in.Target & 0xFFFFFFFFu);
-
-            if (pid != 0) {
-                status = PsLookupProcessByProcessId((HANDLE)(ULONG_PTR)pid, &pProcess);
-                if (NT_SUCCESS(status)) {
-                    status = ObOpenObjectByPointer(
-                                pProcess,
-                                in.HandleAttributes,
-                                NULL,
-                                in.DesiredAccess,
-                                objType,
-                                mode,
-                                &resultHandle);
-                    ObDereferenceObject(pProcess);
-                    pProcess = NULL;
-                }
-            } else {
-                status = STATUS_INVALID_PARAMETER;
-            }
-
-            out.ResultHandle        = resultHandle;
-            out.ActualGrantedAccess = in.DesiredAccess;
-            out.Status              = status;
-            out.KernelPointer       = NULL;
-            out.Type                = R0SKOH_TYPE_PID;
             out.Reserved            = 0;
         }
         else {
@@ -3682,13 +3654,6 @@ NTSTATUS R0SimulateArbitraryDriverCall(PVOID InputBuffer, ULONG InputSize,
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        /*
-         * 设置 RequestorMode：
-         * 用户态 DLL 已定义：
-         *   R0S_REQUESTOR_MODE_KERNEL  0x00
-         *   R0S_REQUESTOR_MODE_USER    0x01
-         * 这里直接映射到 KPROCESSOR_MODE。
-         */
         pIrp->RequestorMode =
             (pIn->RequestorMode == R0S_REQUESTOR_MODE_USER) ? UserMode : KernelMode;
 
@@ -4250,13 +4215,11 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                     if (apiInput->ArgumentCount > 16) { status = STATUS_INVALID_PARAMETER; break; }
                     if (outputSize < sizeof(CALL_KERNEL_API_OUTPUT)) { status = STATUS_BUFFER_TOO_SMALL; break; }
 
-                    
                     if (apiInput->Flags & R0SIMULATE_FLAG_USE_ADDRESS) {
                         UINT64 addr = 0;
                         RtlCopyMemory(&addr, apiInput->ApiName, sizeof(addr));
                         apiAddress = (PVOID)(ULONG_PTR)addr;
                     }
-                    
                     else {
                         const WCHAR* name = apiInput->ApiName;
 

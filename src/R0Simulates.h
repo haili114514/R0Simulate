@@ -67,7 +67,6 @@ extern "C" {
 // ----- R0SKOH -----
 #define R0SKOH_TYPE_HANDLE   0
 #define R0SKOH_TYPE_POINTER  1
-#define R0SKOH_TYPE_PID      2
 
 // ----- R0SKOH Access Mode -----
 #define R0SKOH_ACCESS_MODE_KERNEL   0

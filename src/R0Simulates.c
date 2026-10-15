@@ -397,9 +397,9 @@ R0SIMULATES_API BOOL R0SimulateKernelOpenHandle(
         RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
+    
     if (Type != R0SKOH_TYPE_HANDLE &&
-        Type != R0SKOH_TYPE_POINTER &&
-        Type != R0SKOH_TYPE_PID) {
+        Type != R0SKOH_TYPE_POINTER) {
         RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
