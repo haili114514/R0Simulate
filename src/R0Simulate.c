@@ -4209,12 +4209,6 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     pTotalCount = (volatile LONG *)(&g_IoctlTotalCount);
     InterlockedIncrement(pTotalCount);
 
-    __try {
-        g_LastIoctlPid  = (ULONG)(ULONG_PTR)PsGetCurrentProcessId();
-        g_LastIoctlTid  = (ULONG)(ULONG_PTR)PsGetCurrentThreadId();
-        g_LastIoctlTime = (UINT64)KeQueryInterruptTime();
-    } __except(EXCEPTION_EXECUTE_HANDLER) { }
-
     R0S_LogIn(code, inputBuffer, inputSize);
 
     __try {
@@ -4627,6 +4621,12 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     } __except(EXCEPTION_EXECUTE_HANDLER) {
         status = GetExceptionCode();
     }
+
+    __try {
+        g_LastIoctlPid  = (ULONG)(ULONG_PTR)PsGetCurrentProcessId();
+        g_LastIoctlTid  = (ULONG)(ULONG_PTR)PsGetCurrentThreadId();
+        g_LastIoctlTime = (UINT64)KeQueryInterruptTime();
+    } __except(EXCEPTION_EXECUTE_HANDLER) { }
 
     R0S_LogOut(code, status, info, outputBuffer, outputSize);
 
