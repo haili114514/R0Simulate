@@ -436,7 +436,7 @@ static ULONG        g_AuthMode = 0;
 static LIST_ENTRY   g_AuthListHead;
 static KSPIN_LOCK   g_AuthListLock;
 static ULONG g_VersionMajor    = 2;
-static ULONG g_VersionMinor    = 5;
+static ULONG g_VersionMinor    = 6;
 static ULONG g_VersionBuild    = 0;
 static ULONG g_VersionRevision = 0;
 static LIST_ENTRY   g_Win32kSsdtListHead;
@@ -444,6 +444,15 @@ static KSPIN_LOCK   g_Win32kSsdtListLock;
 static BOOLEAN      g_Win32kSsdtBuilt = FALSE;
 static ULONG        g_SsnTableSelect  = 0;
 static ULONG        g_DebugMode  = 0;
+static ULONG    g_LastIoctlPid    = 0;
+static ULONG    g_LastIoctlTid    = 0;
+static UINT64   g_LastIoctlTime   = 0;
+static ULONG  g_RateLimitEnable    = 0;
+static ULONG  g_RateLimitPerMinute = 0;
+
+static ULONG  g_RateWindowCount = 0;
+static UINT64 g_RateWindowStart = 0;
+static KSPIN_LOCK g_RateLock;
 
 NTKERNELAPI PPEB PsGetProcessPeb(PEPROCESS Process);
 NTKERNELAPI NTSTATUS ZwOpenProcessToken(HANDLE ProcessHandle, ACCESS_MASK DesiredAccess, PHANDLE TokenHandle);
@@ -820,6 +829,11 @@ static VOID RegisterAllVariables(VOID)
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_VersionBuild,    L"g_VersionBuild",    NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_VersionRevision, L"g_VersionRevision", NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_DebugMode, L"g_DebugMode", NULL);
+    R0sRegisterVariable(sizeof(ULONG),    (PVOID)(ULONG_PTR)&g_LastIoctlPid,    L"g_LastIoctlPid",    NULL);
+    R0sRegisterVariable(sizeof(ULONG),    (PVOID)(ULONG_PTR)&g_LastIoctlTid,    L"g_LastIoctlTid",    NULL);
+    R0sRegisterVariable(sizeof(UINT64),   (PVOID)(ULONG_PTR)&g_LastIoctlTime,   L"g_LastIoctlTime",   NULL);
+    R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_RateLimitEnable,   L"g_RateLimitEnable",    NULL);
+    R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_RateLimitPerMinute,   L"g_RateLimitPerMinute", NULL);
 
     for (i = 0; i < 16; i++) {
         WCHAR name[32];
@@ -837,7 +851,6 @@ static VOID RegisterAllVariables(VOID)
     R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_AuthListHead.Flink, L"g_AuthListHead.Flink", NULL);
     R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_AuthListHead.Blink, L"g_AuthListHead.Blink", NULL);
     R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_AuthListLock,       L"g_AuthListLock",       NULL);
-
     R0sRegisterVariable(sizeof(ULONG),   (PVOID)(ULONG_PTR)&g_SsnTableSelect,           L"g_SsnTableSelect",           NULL);
     R0sRegisterVariable(sizeof(PVOID),   (PVOID)(ULONG_PTR)&g_Win32kSsdtListHead.Flink, L"g_Win32kSsdtListHead.Flink", NULL);
     R0sRegisterVariable(sizeof(PVOID),   (PVOID)(ULONG_PTR)&g_Win32kSsdtListHead.Blink, L"g_Win32kSsdtListHead.Blink", NULL);
@@ -849,6 +862,11 @@ static VOID RegisterAllVariables(VOID)
         R0sRegisterVariable(sizeof(LONG),
                             (PVOID)(ULONG_PTR)&g_DeviceObject->ReferenceCount,
                             L"g_DeviceRefCount",
+                            NULL);
+
+        R0sRegisterVariable(sizeof(ULONG),
+                            (PVOID)(ULONG_PTR)&g_DeviceObject->Flags,
+                            L"g_DeviceFlags",
                             NULL);
     }
 }
@@ -1903,6 +1921,8 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         InitializeListHead(&g_AuthListHead);
         KeInitializeSpinLock(&g_AuthListLock);
         g_AuthMode = 0;
+
+        KeInitializeSpinLock(&g_RateLock);
 
         RegisterAllVariables();
 
@@ -4164,8 +4184,36 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         outputBuffer = MmGetSystemAddressForMdlSafe(Irp->MdlAddress, NormalPagePriority);
     }
 
+    if (g_RateLimitEnable > 0) {
+        KIRQL  oldIrql;
+        BOOLEAN reject = FALSE;
+        UINT64 now = (UINT64)KeQueryInterruptTime();
+
+        KeAcquireSpinLock(&g_RateLock, &oldIrql);
+        if (now - g_RateWindowStart >= 600000000ULL) {
+            g_RateWindowStart = now;
+            g_RateWindowCount = 0;
+        }
+        if (++g_RateWindowCount > g_RateLimitPerMinute)
+            reject = TRUE;
+        KeReleaseSpinLock(&g_RateLock, oldIrql);
+
+        if (reject) {
+            Irp->IoStatus.Status = STATUS_QUOTA_EXCEEDED;
+            Irp->IoStatus.Information = 0;
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            return STATUS_DEVICE_BUSY;
+        }
+    }
+
     pTotalCount = (volatile LONG *)(&g_IoctlTotalCount);
     InterlockedIncrement(pTotalCount);
+
+    __try {
+        g_LastIoctlPid  = (ULONG)(ULONG_PTR)PsGetCurrentProcessId();
+        g_LastIoctlTid  = (ULONG)(ULONG_PTR)PsGetCurrentThreadId();
+        g_LastIoctlTime = (UINT64)KeQueryInterruptTime();
+    } __except(EXCEPTION_EXECUTE_HANDLER) { }
 
     R0S_LogIn(code, inputBuffer, inputSize);
 
