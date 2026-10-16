@@ -8,20 +8,6 @@
 
 #define LIST_BUFFER_SIZE 16384
 
-static int wcs_icmp_char(const WCHAR* a, const char* b) {
-    if (!a || !b) return -1;
-    while (*b) {
-        WCHAR ca = *a;
-        WCHAR cb = (WCHAR)(unsigned char)*b;
-        if (ca >= L'A' && ca <= L'Z') ca = (WCHAR)(ca + 32);
-        if (cb >= L'A' && cb <= L'Z') cb = (WCHAR)(cb + 32);
-        if (ca != cb) return (ca < cb) ? -1 : 1;
-        a++;
-        b++;
-    }
-    return (*a == 0) ? 0 : 1;
-}
-
 static BOOL IsNumericId(const char* str) {
     if (!str || !*str) return FALSE;
     if (str[0] == '0' && (str[1] == 'x' || str[1] == 'X')) {
@@ -59,7 +45,7 @@ static void PrintHelp(const char* prog) {
         "  %s set  16 1\n"
         "  %s set  0x1000 1\n"
         "\n"
-        "Name mode examples (case-insensitive):\n"
+        "Name mode examples (case-insensitive, resolved by driver):\n"
         "  %s get  g_SecureMode\n"
         "  %s set  g_SecureMode 1\n"
         "  %s get  g_PreviousModeOffset\n"
@@ -83,94 +69,101 @@ static const DLL_VAR g_DllVars[] = {
 };
 #define DLL_VARS_COUNT (sizeof(g_DllVars) / sizeof(g_DllVars[0]))
 
-static BOOL FindIdByName(const char* name, PULONG pOutId, PWCHAR pOutName, ULONG nameChars) {
+static ULONG LookupDllVar(const char* name) {
     ULONG i;
-
     for (i = 0; i < DLL_VARS_COUNT; i++) {
-        if (_stricmp(g_DllVars[i].name, name) == 0) {
-            *pOutId = g_DllVars[i].id;
-            if (pOutName && nameChars > 0) {
-                MultiByteToWideChar(CP_ACP, 0, g_DllVars[i].name, -1, pOutName, (int)nameChars);
-            }
-            return TRUE;
-        }
+        if (_stricmp(g_DllVars[i].name, name) == 0)
+            return g_DllVars[i].id;
+    }
+    return 0;
+}
+
+static BOOL BuildVarId(const char* arg,
+                       PUINT64     pOutVarId,
+                       PWCHAR      pOutName,
+                       ULONG       nameChars,
+                       PWCHAR*     pAllocName)
+{
+    ULONG dllId;
+    size_t need;
+    WCHAR* nameW;
+
+    *pAllocName = NULL;
+
+    if (IsNumericId(arg)) {
+        *pOutVarId = (UINT64)strtoul(arg, NULL, 0);
+        if (pOutName && nameChars > 0) pOutName[0] = L'\0';
+        return TRUE;
     }
 
-    UCHAR* buffer = (UCHAR*)calloc(1, LIST_BUFFER_SIZE);
-    if (!buffer) {
+    
+    dllId = LookupDllVar(arg);
+    if (dllId != 0) {
+        *pOutVarId = (UINT64)dllId;
+        if (pOutName && nameChars > 0)
+            MultiByteToWideChar(CP_ACP, 0, arg, -1, pOutName, (int)nameChars);
+        return TRUE;
+    }
+
+    
+    need = strlen(arg) + 1;
+    if (need > 256) {
+        fprintf(stderr, "Error: variable name too long.\n");
+        return FALSE;
+    }
+
+    nameW = (WCHAR*)calloc(need, sizeof(WCHAR));
+    if (!nameW) {
         fprintf(stderr, "Error: memory allocation failed.\n");
         return FALSE;
     }
 
-    ULONG infoCount = 0;
-    BOOL ok = R0SimulateSetInternalVariables(
-        R0SIMULATE_VAR_OP_LIST,
-        0, 0,
-        buffer, LIST_BUFFER_SIZE,
-        &infoCount,
-        R0SIMULATE_ERROR_MODE_DEFAULT);
-
-    if (!ok) {
-        fprintf(stderr, "Error: LIST failed during name resolution (GetLastError = %lu)\n", GetLastError());
-        free(buffer);
+    if (MultiByteToWideChar(CP_ACP, 0, arg, -1, nameW, (int)need) == 0) {
+        free(nameW);
+        fprintf(stderr, "Error: failed to convert name to wide chars.\n");
         return FALSE;
     }
 
-    ULONG count = *(PULONG)buffer;
-    PVAR_INFO vars = (PVAR_INFO)(buffer + sizeof(ULONG));
+    *pAllocName = nameW;
+    *pOutVarId  = R0SIMULATE_VAR_NAME_FLAG | (UINT64)(ULONG_PTR)nameW;
 
-    BOOL found = FALSE;
-    for (i = 0; i < count; i++) {
-        if (wcs_icmp_char(vars[i].Name, name) == 0) {
-            *pOutId = vars[i].Id;
-            if (pOutName && nameChars > 0) {
-                wcsncpy(pOutName, vars[i].Name, nameChars - 1);
-                pOutName[nameChars - 1] = L'\0';
-            }
-            found = TRUE;
-            break;
-        }
+    if (pOutName && nameChars > 0) {
+        wcsncpy(pOutName, nameW, nameChars - 1);
+        pOutName[nameChars - 1] = L'\0';
     }
-
-    free(buffer);
-    if (!found) {
-        fprintf(stderr, "Error: variable '%s' not found. Use 'SIV list' to see all names.\n", name);
-    }
-    return found;
-}
-
-static BOOL ResolveId(const char* arg, PULONG pOutId, PWCHAR pOutName, ULONG nameChars) {
-    if (IsNumericId(arg)) {
-        *pOutId = (ULONG)strtoul(arg, NULL, 0);
-        if (pOutName && nameChars > 0) pOutName[0] = L'\0';
-        return TRUE;
-    }
-    return FindIdByName(arg, pOutId, pOutName, nameChars);
+    return TRUE;
 }
 
 int main(int argc, char* argv[]) {
+    const char* cmd;
+    BOOL result = FALSE;
+    ULONG errorMode = R0SIMULATE_ERROR_MODE_DEFAULT;
+
     if (argc < 2) {
         PrintHelp(argv[0]);
         return 1;
     }
 
-    const char* cmd = argv[1];
-    BOOL result = FALSE;
-    ULONG errorMode = R0SIMULATE_ERROR_MODE_DEFAULT;
+    cmd = argv[1];
 
     if (strcmp(cmd, "list") == 0) {
+        UCHAR* buffer;
+        ULONG infoCount = 0;
+        ULONG count;
+        PVAR_INFO vars;
+        ULONG i;
+
         if (argc != 2) {
             fprintf(stderr, "Error: 'list' takes no extra arguments.\n");
             return 1;
         }
 
-        UCHAR* buffer = (UCHAR*)calloc(1, LIST_BUFFER_SIZE);
+        buffer = (UCHAR*)calloc(1, LIST_BUFFER_SIZE);
         if (!buffer) {
             fprintf(stderr, "Error: memory allocation failed.\n");
             return 1;
         }
 
-        ULONG infoCount = 0;
         result = R0SimulateSetInternalVariables(
             R0SIMULATE_VAR_OP_LIST,
             0, 0,
@@ -185,13 +178,13 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        ULONG count = *(PULONG)buffer;
-        PVAR_INFO vars = (PVAR_INFO)(buffer + sizeof(ULONG));
+        count = *(PULONG)buffer;
+        vars  = (PVAR_INFO)(buffer + sizeof(ULONG));
 
         printf("Driver returned %lu internal variable(s):\n", count);
         printf("  %-6s  %-40s  %-6s  %-18s\n", "ID", "Name", "Size", "Value");
         printf("  %-6s  %-40s  %-6s  %-18s\n", "----", "----", "----", "-----");
-        for (ULONG i = 0; i < count; i++) {
+        for (i = 0; i < count; i++) {
             printf("  0x%04lX  ", vars[i].Id);
             wprintf(L"%-40s", vars[i].Name);
             printf("  %-6lu  0x%016llX\n", vars[i].Size, vars[i].Value);
@@ -220,27 +213,32 @@ int main(int argc, char* argv[]) {
         result = TRUE;
     }
     else if (strcmp(cmd, "get") == 0) {
+        UINT64 varId = 0;
+        WCHAR  resolvedName[64] = {0};
+        WCHAR* allocatedName = NULL;
+        BOOL   isNamed;
+        UINT64 value = 0;
+
         if (argc != 3) {
             fprintf(stderr, "Error: 'get' requires a variable ID or name.\n");
             return 1;
         }
 
-        ULONG  id = 0;
-        WCHAR  resolvedName[64] = {0};
-        BOOL   isNamed = !IsNumericId(argv[2]);
+        isNamed = !IsNumericId(argv[2]);
 
-        if (!ResolveId(argv[2], &id, resolvedName, 64)) {
+        if (!BuildVarId(argv[2], &varId, resolvedName, 64, &allocatedName)) {
             return 1;
         }
 
-        UINT64 value = 0;
         result = R0SimulateSetInternalVariables(
             R0SIMULATE_VAR_OP_GET,
-            id,
+            varId,
             0,
             &value, sizeof(value),
             NULL,
             errorMode);
+
+        free(allocatedName);   
 
         if (!result) {
             DWORD err = GetLastError();
@@ -249,36 +247,42 @@ int main(int argc, char* argv[]) {
         }
 
         if (isNamed) {
-            printf("ID = 0x%lX (%lu)  Name = ", id, id);
+            printf("Name = ");
             wprintf(L"%ls", resolvedName);
             printf("  value = 0x%016llX  (%llu)\n", value, value);
         } else {
-            printf("ID = 0x%lX (%lu)  value = 0x%016llX  (%llu)\n",
-                   id, id, value, value);
+            printf("ID = 0x%llX (%llu)  value = 0x%016llX  (%llu)\n",
+                   varId, varId, value, value);
         }
     }
     else if (strcmp(cmd, "set") == 0) {
+        UINT64 varId = 0;
+        WCHAR  resolvedName[64] = {0};
+        WCHAR* allocatedName = NULL;
+        BOOL   isNamed;
+        UINT64 value;
+
         if (argc != 4) {
             fprintf(stderr, "Error: 'set' requires a variable ID or name and a value.\n");
             return 1;
         }
 
-        ULONG  id = 0;
-        WCHAR  resolvedName[64] = {0};
-        BOOL   isNamed = !IsNumericId(argv[2]);
+        isNamed = !IsNumericId(argv[2]);
 
-        if (!ResolveId(argv[2], &id, resolvedName, 64)) {
+        if (!BuildVarId(argv[2], &varId, resolvedName, 64, &allocatedName)) {
             return 1;
         }
 
-        UINT64 value = ParseValue(argv[3]);
+        value = ParseValue(argv[3]);
         result = R0SimulateSetInternalVariables(
             R0SIMULATE_VAR_OP_SET,
-            id,
+            varId,
             value,
             NULL, 0,
             NULL,
             errorMode);
+
+        free(allocatedName);
 
         if (!result) {
             DWORD err = GetLastError();
@@ -287,11 +291,11 @@ int main(int argc, char* argv[]) {
         }
 
         if (isNamed) {
-            printf("Set ID = 0x%lX (%lu)  Name = ", id, id);
+            printf("Set Name = ");
             wprintf(L"%ls", resolvedName);
             printf("  = 0x%016llX\n", value);
         } else {
-            printf("Set ID = 0x%lX (%lu) = 0x%016llX\n", id, id, value);
+            printf("Set ID = 0x%llX (%llu) = 0x%016llX\n", varId, varId, value);
         }
     }
     else {
