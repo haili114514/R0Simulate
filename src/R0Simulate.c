@@ -105,7 +105,7 @@
 #define R0S_TAG  "[R0Simulate] "
 
 #define R0S_LOG_IN(code, inSize, outSize, method) \
-    do { if (g_DebugMode) { \
+    do { if (g_DebugMode & (1UL << (((code) >> 2) & 0xFFF & ~0x800))) { \
         DbgPrint(R0S_TAG "IN  code=0x%08X pid=0x%p tid=0x%p in=%u out=%u method=%u irql=%u\n", \
                  (ULONG)(code), PsGetCurrentProcessId(), PsGetCurrentThreadId(), \
                  (ULONG)(inSize), (ULONG)(outSize), (ULONG)(method), \
@@ -436,7 +436,7 @@ static ULONG        g_AuthMode = 0;
 static LIST_ENTRY   g_AuthListHead;
 static KSPIN_LOCK   g_AuthListLock;
 static ULONG g_VersionMajor    = 2;
-static ULONG g_VersionMinor    = 6;
+static ULONG g_VersionMinor    = 7;
 static ULONG g_VersionBuild    = 0;
 static ULONG g_VersionRevision = 0;
 static LIST_ENTRY   g_Win32kSsdtListHead;
@@ -3775,7 +3775,7 @@ static VOID R0S_LogIn(ULONG code, PVOID inputBuffer, ULONG inputSize)
     PVOID       tid    = PsGetCurrentThreadId();
     PVOID       pid    = PsGetCurrentProcessId();
 
-    if (!g_DebugMode) return;
+    if (idx >= 16 || !(g_DebugMode & (1UL << idx))) return;
 
     __try {
         switch (idx) {
@@ -3988,7 +3988,7 @@ static VOID R0S_LogOut(ULONG code, NTSTATUS status, ULONG_PTR info,
     PVOID       tid    = PsGetCurrentThreadId();
     PVOID       pid    = PsGetCurrentProcessId();
 
-    if (!g_DebugMode) return;
+    if (idx >= 16 || !(g_DebugMode & (1UL << idx))) return;
 
     __try {
         switch (idx) {
