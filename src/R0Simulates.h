@@ -30,22 +30,8 @@ extern "C" {
 #define IOCTL_R0SIMULATE_IRQL                       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80E, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_ARBITRARY_DRIVER_CALL      CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80F, METHOD_NEITHER, FILE_ANY_ACCESS)
 
-#define IOCTL_INDEX_EXEC_INSTRUCTION      0
-#define IOCTL_INDEX_CALL_KERNEL_API       1
-#define IOCTL_INDEX_PROCESS_HIDING        2
-#define IOCTL_INDEX_PREVIOUS_MODE_SWITCH  3
-#define IOCTL_INDEX_KERNEL_OPEN_HANDLE    4
-#define IOCTL_INDEX_KERNEL_MEMORY_ACCESS  5
-#define IOCTL_INDEX_GET_SYSTEM_TOKEN      6
-#define IOCTL_INDEX_SET_INTERNAL_VARS     7
-#define IOCTL_INDEX_GET_KERNEL_FUNCTION   8
-#define IOCTL_INDEX_IO                    9
-#define IOCTL_INDEX_AUTHORIZED_LIST       10
-#define IOCTL_INDEX_CREATE_SYSTEM_THREAD  11
-#define IOCTL_INDEX_DIRECT_CREATE_DRIVER  12
-#define IOCTL_INDEX_MSR                   13
-#define IOCTL_INDEX_IRQL                  14
-#define IOCTL_INDEX_ARBITRARY_DRIVER_CALL 15
+#define R0S_IOCTL_LAST    0x0F
+#define R0S_IOCTL_COUNT   (R0S_IOCTL_LAST + 1)
 
 // ----- Flags -----
 #define R0SIMULATE_FLAG_USE_ADDRESS  0x00000001
@@ -97,6 +83,12 @@ extern "C" {
 #define R0SAUTH_OP_ADD      0x01
 #define R0SAUTH_OP_REMOVE   0x02
 #define R0SAUTH_OP_LIST     0x03
+#define R0SAUTH_OP_SET      0x04
+#define R0SAUTH_OP_GET      0x05
+
+// ----- Authorized List GET types -----
+#define R0SAUTH_GET_MASK        0
+#define R0SAUTH_GET_EXITSTATUS  1
 
 // ----- MSR -----
 #define R0SMSR_OP_READ      0x01
@@ -245,17 +237,35 @@ typedef struct _R0S_AUTH_LIST_INPUT {
 } R0S_AUTH_LIST_INPUT, *PR0S_AUTH_LIST_INPUT;
 
 typedef struct _R0S_AUTH_ENTRY_INFO {
-    HANDLE Pid;
-    ULONG  Reserved;
-    UCHAR  Valid;
-    UCHAR  Pad[7];
+    HANDLE   Pid;
+    NTSTATUS ExitStatus;
+    ULONG    Reserved;
+    UINT64   IoctlMask;
 } R0S_AUTH_ENTRY_INFO, *PR0S_AUTH_ENTRY_INFO;
 
 typedef struct _R0S_AUTH_LIST_OUTPUT {
     ULONG Count;
     ULONG Reserved;
+    UINT64 DefaultMask;
     R0S_AUTH_ENTRY_INFO Entries[1];
 } R0S_AUTH_LIST_OUTPUT, *PR0S_AUTH_LIST_OUTPUT;
+
+typedef struct _R0S_AUTH_SET_INPUT {
+    R0S_AUTH_LIST_INPUT Base;
+    UINT64 Mask;
+} R0S_AUTH_SET_INPUT, *PR0S_AUTH_SET_INPUT;
+
+typedef struct _R0S_AUTH_GET_INPUT {
+    R0S_AUTH_LIST_INPUT Base;
+    ULONG  GetType;
+    ULONG  Reserved;
+} R0S_AUTH_GET_INPUT, *PR0S_AUTH_GET_INPUT;
+
+typedef struct _R0S_AUTH_GET_OUTPUT {
+    NTSTATUS Status;
+    ULONG    Reserved;
+    UINT64   Value;
+} R0S_AUTH_GET_OUTPUT, *PR0S_AUTH_GET_OUTPUT;
 
 typedef struct _R0S_CREATE_THREAD_INPUT {
     UINT64 StartRoutine;
@@ -392,6 +402,15 @@ R0SIMULATES_API BOOL R0SimulateAuthorizedListOperations(
     PVOID  pOutBuffer,
     ULONG  outSize,
     PULONG pInfoCount);
+
+R0SIMULATES_API BOOL R0SimulateAuthorizedListSetMask(
+    ULONG  pid,
+    UINT64 mask);
+
+R0SIMULATES_API BOOL R0SimulateAuthorizedListGet(
+    ULONG   pid,
+    ULONG   getType,
+    PUINT64 pOutValue);
 
 R0SIMULATES_API BOOL R0SimulateCreateSystemThread(
     UINT64  startRoutine,

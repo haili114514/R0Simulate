@@ -830,6 +830,101 @@ R0SIMULATES_API BOOL R0SimulateAuthorizedListOperations(
     return result;
 }
 
+R0SIMULATES_API BOOL R0SimulateAuthorizedListSetMask(
+    ULONG  pid,
+    UINT64 mask)
+{
+    BOOL result = FALSE;
+    R0S_AUTH_SET_INPUT in;
+    NTSTATUS outStatus = 0;
+    IO_STATUS_BLOCK ioStatus;
+    NTSTATUS status;
+
+    if (!R0Sim_OpenDriver()) return FALSE;
+    if (pid == 0) {
+        RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    memset(&in, 0, sizeof(in));
+    in.Base.Operation = R0SAUTH_OP_SET;
+    in.Base.Pid       = pid;
+    in.Mask           = mask;
+
+    memset(&ioStatus, 0, sizeof(ioStatus));
+
+    status = NtDeviceIoControlFile(
+        g_hDriver, NULL, NULL, NULL, &ioStatus,
+        IOCTL_R0SIMULATE_AUTHORIZED_LIST,
+        &in, sizeof(in),
+        &outStatus, sizeof(outStatus)
+    );
+
+    if (!NT_SUCCESS(status)) {
+        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        return FALSE;
+    }
+    if (!NT_SUCCESS(outStatus)) {
+        RtlSetLastWin32Error(NtStatusToWin32Error(outStatus));
+        return FALSE;
+    }
+
+    RtlSetLastWin32Error(ERROR_SUCCESS);
+    result = TRUE;
+    return result;
+}
+
+R0SIMULATES_API BOOL R0SimulateAuthorizedListGet(
+    ULONG   pid,
+    ULONG   getType,
+    PUINT64 pOutValue)
+{
+    BOOL result = FALSE;
+    R0S_AUTH_GET_INPUT  in;
+    R0S_AUTH_GET_OUTPUT out;
+    IO_STATUS_BLOCK ioStatus;
+    NTSTATUS status;
+
+    if (!R0Sim_OpenDriver()) return FALSE;
+    if (pid == 0 || !pOutValue) {
+        RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (getType != R0SAUTH_GET_MASK && getType != R0SAUTH_GET_EXITSTATUS) {
+        RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    memset(&in, 0, sizeof(in));
+    in.Base.Operation = R0SAUTH_OP_GET;
+    in.Base.Pid       = pid;
+    in.GetType        = getType;
+
+    memset(&out, 0, sizeof(out));
+    memset(&ioStatus, 0, sizeof(ioStatus));
+
+    status = NtDeviceIoControlFile(
+        g_hDriver, NULL, NULL, NULL, &ioStatus,
+        IOCTL_R0SIMULATE_AUTHORIZED_LIST,
+        &in, sizeof(in),
+        &out, sizeof(out)
+    );
+
+    if (!NT_SUCCESS(status)) {
+        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        return FALSE;
+    }
+    if (!NT_SUCCESS(out.Status)) {
+        RtlSetLastWin32Error(NtStatusToWin32Error(out.Status));
+        return FALSE;
+    }
+
+    *pOutValue = out.Value;
+    RtlSetLastWin32Error(ERROR_SUCCESS);
+    result = TRUE;
+    return result;
+}
+
 R0SIMULATES_API BOOL R0SimulateCreateSystemThread(
     UINT64  startRoutine,
     UINT64  startContext,
