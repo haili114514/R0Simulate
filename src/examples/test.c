@@ -34,6 +34,7 @@
 #define IRP_MJ_QUERY_QUOTA                  0x19
 #define IRP_MJ_SET_QUOTA                    0x1A
 #define IRP_MJ_PNP                          0x1B
+
 #ifndef OBJ_KERNEL_HANDLE
 #define OBJ_KERNEL_HANDLE        0x00000200L
 #endif
@@ -54,7 +55,7 @@
 #define R0SKOH_ACCESS_MODE_USER         1
 #define R0SKOH_ACCESS_MODE_KERNEL       0
 
-#define VAR_ID_G_DRIVEROBJECT   0x002A
+#define VAR_ID_G_DRIVEROBJECT   0x003B
 
 static void print_last_error(const char* msg)
 {
@@ -602,12 +603,14 @@ test10_end:
         {
             R0S_AUTH_LIST_OUTPUT* pOut = (R0S_AUTH_LIST_OUTPUT*)buf;
             printf("      OK: %lu entries\n", (unsigned long)pOut->Count);
-            printf("      %-12s  %-6s\n", "PID", "Valid");
+            printf("      %-12s  %-6s  %-12s  %-18s\n", "PID", "Valid", "ExitStatus", "IoctlMask");
             for (ULONG i = 0; i < pOut->Count; i++)
             {
-                printf("      %-12lu  %-6s\n",
+                printf("      %-12lu  %-6s  0x%08X    0x%016llX\n",
                     (unsigned long)(ULONG_PTR)pOut->Entries[i].Pid,
-                    pOut->Entries[i].Valid ? "yes" : "no");
+                    (pOut->Entries[i].Pid != NULL) ? "yes" : "no",
+                    (unsigned int)pOut->Entries[i].ExitStatus,
+                    (unsigned long long)pOut->Entries[i].IoctlMask);
             }
         }
 
@@ -663,7 +666,7 @@ test10_end:
         execAddr = R0SimulateAPI(
             L"ExAllocatePoolWithTag",
             3, 0,
-            (UINT64)0x00000000,   
+            (UINT64)0x00000000,
             (UINT64)64,
             tag_DEMO
         );
@@ -714,7 +717,7 @@ thread_done:
     {
         UINT64 value = 0;
         BOOL   ok;
-        
+
         ULONG  targetMsr = 0xC0000082;
 
         printf("  [13.1] Read MSR 0x%08X (IA32_LSTAR)\n", targetMsr);
@@ -724,7 +727,6 @@ thread_done:
         else
             print_last_error("R0S MSR read");
 
-        
         printf("  [13.2] Read MSR 0xC0000100 (IA32_FS_BASE)\n");
         ok = R0SimulateMSR(R0SMSR_OP_READ, 0xC0000100, 0, &value);
         if (ok)

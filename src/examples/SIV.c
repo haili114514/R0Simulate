@@ -6,7 +6,7 @@
 #include <ctype.h>
 #include "R0Simulates.h"
 
-#define LIST_BUFFER_SIZE 16384
+#define LIST_BUFFER_SIZE (512 * 1024)
 
 static BOOL IsNumericId(const char* str) {
     if (!str || !*str) return FALSE;
