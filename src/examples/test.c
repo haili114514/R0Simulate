@@ -126,8 +126,7 @@ int main(void)
             R0SIMULATE_VAR_OP_LIST,
             0, 0,
             listBuffer, sizeof(listBuffer),
-            &infoCount,
-            R0SIMULATE_ERROR_MODE_DEFAULT
+            &infoCount
         );
         if (ok)
         {
@@ -148,8 +147,7 @@ int main(void)
                     firstId,
                     0,
                     &val, sizeof(val),
-                    NULL,
-                    R0SIMULATE_ERROR_MODE_DEFAULT
+                    NULL
                 );
                 if (ok)
                     printf("      OK: value = 0x%llX\n", val);
@@ -161,23 +159,7 @@ int main(void)
         {
             print_last_error("R0S SIV OP_LIST");
         }
-        printf("  [1.3] OP_GET DLL internal variable (ErrorMode)\n");
-        {
-            UINT64 currentMode = 0;
-            ok = R0SimulateSetInternalVariables(
-                R0SIMULATE_VAR_OP_GET,
-                R0SIMULATE_VAR_DLL_ERROR_MODE,
-                0,
-                &currentMode, sizeof(currentMode),
-                NULL,
-                R0SIMULATE_ERROR_MODE_DEFAULT
-            );
-            if (ok)
-                printf("      Current DLL_ErrorMode = %llu (0=convert, 1=raw NTSTATUS)\n", currentMode);
-            else
-                print_last_error("R0S SIV GET DLL_ErrorMode");
-        }
-        printf("  [1.4] Force ErrorMode=0 (convert) with invalid ID 0xFFFFFFFF\n");
+        printf("  [1.3] OP_GET on invalid ID 0xFFFFFFFF (expect raw NTSTATUS)\n");
         SetLastError(0);
         {
             UINT64 dummy = 0;
@@ -185,85 +167,20 @@ int main(void)
                 R0SIMULATE_VAR_OP_GET,
                 0xFFFFFFFF, 0,
                 &dummy, sizeof(dummy),
-                NULL, 0
-            );
-            if (!ok)
-            {
-                DWORD err = GetLastError();
-                printf("      FAIL returned, error code = 0x%08lX (%lu)\n", err, err);
-                if (err == ERROR_INVALID_PARAMETER)
-                    printf("      PASS: error converted to Win32 ERROR_INVALID_PARAMETER\n");
-                else
-                    printf("      FAIL: unexpected error code\n");
-            }
-            else
-                printf("      UNEXPECTED: call succeeded with invalid ID\n");
-        }
-        printf("  [1.5] Force ErrorMode=1 (raw) with invalid ID 0xFFFFFFFF\n");
-        SetLastError(0);
-        {
-            UINT64 dummy = 0;
-            ok = R0SimulateSetInternalVariables(
-                R0SIMULATE_VAR_OP_GET,
-                0xFFFFFFFF, 0,
-                &dummy, sizeof(dummy),
-                NULL, 1
+                NULL
             );
             if (!ok)
             {
                 DWORD err = GetLastError();
                 printf("      FAIL returned, error code = 0x%08lX (%lu)\n", err, err);
                 if (err == 0xC000000D)
-                    printf("      PASS: error is raw NTSTATUS 0xC000000D\n");
+                    printf("      PASS: error is raw NTSTATUS 0xC000000D (STATUS_INVALID_PARAMETER)\n");
                 else
-                    printf("      FAIL: unexpected error code\n");
+                    printf("      FAIL: unexpected error code (expected 0xC000000D)\n");
             }
             else
                 printf("      UNEXPECTED: call succeeded with invalid ID\n");
         }
-
-        printf("  [1.6] Set DLL_ErrorMode=1, then use ErrorMode=DEFAULT\n");
-        ok = R0SimulateSetInternalVariables(
-            R0SIMULATE_VAR_OP_SET,
-            R0SIMULATE_VAR_DLL_ERROR_MODE,
-            1,
-            NULL, 0, NULL,
-            R0SIMULATE_ERROR_MODE_DEFAULT
-        );
-        if (ok) printf("      DLL_ErrorMode set to 1 successfully\n");
-        else    print_last_error("R0S SIV SET DLL_ErrorMode=1");
-
-        SetLastError(0);
-        {
-            UINT64 dummy = 0;
-            ok = R0SimulateSetInternalVariables(
-                R0SIMULATE_VAR_OP_GET,
-                0xFFFFFFFF, 0,
-                &dummy, sizeof(dummy),
-                NULL,
-                R0SIMULATE_ERROR_MODE_DEFAULT
-            );
-            if (!ok)
-            {
-                DWORD err = GetLastError();
-                printf("      FAIL returned, error code = 0x%08lX (%lu)\n", err, err);
-                if (err == 0xC000000D)
-                    printf("      PASS: default mode used internal value 1 -> raw NTSTATUS\n");
-                else
-                    printf("      FAIL: unexpected error code\n");
-            }
-        }
-        printf("  [1.7] Restore DLL_ErrorMode=0\n");
-        ok = R0SimulateSetInternalVariables(
-            R0SIMULATE_VAR_OP_SET,
-            R0SIMULATE_VAR_DLL_ERROR_MODE,
-            0,
-            NULL, 0, NULL,
-            R0SIMULATE_ERROR_MODE_DEFAULT
-        );
-        if (ok) printf("      DLL_ErrorMode restored to 0\n");
-        else    print_last_error("R0S SIV SET DLL_ErrorMode=0");
-
         printf("\n");
     }
     printf("[2] IOCTL_R0SIMULATE_EXEC_INSTRUCTION  (R0S EI)\n");
@@ -764,8 +681,7 @@ thread_done:
             VAR_ID_G_DRIVEROBJECT,
             0,
             &driverObject, sizeof(driverObject),
-            NULL,
-            R0SIMULATE_ERROR_MODE_DEFAULT
+            NULL
         );
         if (!ok || driverObject == 0)
         {
@@ -814,10 +730,12 @@ thread_done:
             DWORD err = GetLastError();
             printf("      FAIL returned as expected, error code = 0x%08lX (%lu)\n",
                    err, err);
-            if (err == ERROR_INVALID_PARAMETER)
-                printf("      PASS: NULL driver object rejected with ERROR_INVALID_PARAMETER\n");
+            if (err == 0xC000000D)
+                printf("      PASS: NULL driver object rejected with raw NTSTATUS 0xC000000D\n");
+            else if (err == ERROR_INVALID_PARAMETER)
+                printf("      PASS: NULL driver object rejected with ERROR_INVALID_PARAMETER (old behaviour)\n");
             else
-                printf("      FAIL: unexpected error code (expected 87 / ERROR_INVALID_PARAMETER)\n");
+                printf("      FAIL: unexpected error code\n");
         }
         else
         {

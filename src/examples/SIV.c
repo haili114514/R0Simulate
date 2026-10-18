@@ -50,32 +50,10 @@ static void PrintHelp(const char* prog) {
         "  %s set  g_SecureMode 1\n"
         "  %s get  g_PreviousModeOffset\n"
         "  %s set  g_IoctlDisable[0] 1\n"
-        "  %s get  DLL_ErrorMode\n"
         "\n"
         "Notes: requires admin privileges; R0Simulate.sys must be loaded.\n",
-        prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, prog
+        prog, prog, prog, prog, prog, prog, prog, prog, prog, prog
     );
-}
-
-typedef struct _DLL_VAR {
-    const char* name;
-    ULONG       id;
-} DLL_VAR;
-
-static const DLL_VAR g_DllVars[] = {
-    { "DLL_ErrorMode",    R0SIMULATE_VAR_DLL_ERROR_MODE },
-    { "DLL_ERRORMODE",    R0SIMULATE_VAR_DLL_ERROR_MODE },
-    { "ErrorMode",        R0SIMULATE_VAR_DLL_ERROR_MODE },
-};
-#define DLL_VARS_COUNT (sizeof(g_DllVars) / sizeof(g_DllVars[0]))
-
-static ULONG LookupDllVar(const char* name) {
-    ULONG i;
-    for (i = 0; i < DLL_VARS_COUNT; i++) {
-        if (_stricmp(g_DllVars[i].name, name) == 0)
-            return g_DllVars[i].id;
-    }
-    return 0;
 }
 
 static BOOL BuildVarId(const char* arg,
@@ -84,7 +62,6 @@ static BOOL BuildVarId(const char* arg,
                        ULONG       nameChars,
                        PWCHAR*     pAllocName)
 {
-    ULONG dllId;
     size_t need;
     WCHAR* nameW;
 
@@ -96,16 +73,6 @@ static BOOL BuildVarId(const char* arg,
         return TRUE;
     }
 
-    
-    dllId = LookupDllVar(arg);
-    if (dllId != 0) {
-        *pOutVarId = (UINT64)dllId;
-        if (pOutName && nameChars > 0)
-            MultiByteToWideChar(CP_ACP, 0, arg, -1, pOutName, (int)nameChars);
-        return TRUE;
-    }
-
-    
     need = strlen(arg) + 1;
     if (need > 256) {
         fprintf(stderr, "Error: variable name too long.\n");
@@ -137,7 +104,6 @@ static BOOL BuildVarId(const char* arg,
 int main(int argc, char* argv[]) {
     const char* cmd;
     BOOL result = FALSE;
-    ULONG errorMode = R0SIMULATE_ERROR_MODE_DEFAULT;
 
     if (argc < 2) {
         PrintHelp(argv[0]);
@@ -168,8 +134,7 @@ int main(int argc, char* argv[]) {
             R0SIMULATE_VAR_OP_LIST,
             0, 0,
             buffer, LIST_BUFFER_SIZE,
-            &infoCount,
-            errorMode);
+            &infoCount);
 
         if (!result) {
             DWORD err = GetLastError();
@@ -188,25 +153,6 @@ int main(int argc, char* argv[]) {
             printf("  0x%04lX  ", vars[i].Id);
             wprintf(L"%-40s", vars[i].Name);
             printf("  %-6lu  0x%016llX\n", vars[i].Size, vars[i].Value);
-        }
-
-        {
-            UINT64 dllMode = 0;
-            if (R0SimulateSetInternalVariables(
-                    R0SIMULATE_VAR_OP_GET,
-                    R0SIMULATE_VAR_DLL_ERROR_MODE,
-                    0,
-                    &dllMode, sizeof(dllMode),
-                    NULL,
-                    errorMode)) {
-                printf("\nDLL internal variable(s):\n");
-                printf("  %-6s  %-40s  %-6s  %-18s\n", "ID", "Name", "Size", "Value");
-                printf("  0x%-4X  %-40s  %-6d  0x%016llX\n",
-                       R0SIMULATE_VAR_DLL_ERROR_MODE,
-                       "DLL_ErrorMode",
-                       4,
-                       dllMode);
-            }
         }
 
         free(buffer);
@@ -235,10 +181,9 @@ int main(int argc, char* argv[]) {
             varId,
             0,
             &value, sizeof(value),
-            NULL,
-            errorMode);
+            NULL);
 
-        free(allocatedName);   
+        free(allocatedName);
 
         if (!result) {
             DWORD err = GetLastError();
@@ -279,8 +224,7 @@ int main(int argc, char* argv[]) {
             varId,
             value,
             NULL, 0,
-            NULL,
-            errorMode);
+            NULL);
 
         free(allocatedName);
 
