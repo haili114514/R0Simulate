@@ -6,9 +6,9 @@
 
 #include <winioctl.h>
 #include <stdarg.h>
-#include "R0Simulates.h"
 #include <winternl.h>
 #include <ntstatus.h>
+#include "R0Simulates.h"
 
 #if defined(_MSC_VER) && !defined(__MINGW32__)
 PVOID NTAPI RtlAllocateHeap(HANDLE HeapHandle, ULONG Flags, SIZE_T Size);
@@ -17,7 +17,6 @@ HANDLE NTAPI RtlCreateHeap(ULONG Flags, PVOID HeapBase, SIZE_T ReserveSize,
                            SIZE_T CommitSize, PVOID Lock, PVOID Parameters);
 #endif
 
-ULONG NTAPI RtlNtStatusToDosError(NTSTATUS Status);
 VOID  NTAPI RtlSetLastWin32Error(DWORD Win32Error);
 
 #pragma function(memcpy)
@@ -90,7 +89,7 @@ static BOOL R0Sim_OpenDriver(void) {
         g_hDriver = hFile;
         return TRUE;
     }
-    RtlSetLastWin32Error(ERROR_SERVICE_NOT_ACTIVE);
+    RtlSetLastWin32Error((DWORD)status);
     return FALSE;
 }
 
@@ -101,16 +100,6 @@ static void R0Sim_CloseDriver(void) {
     }
 }
 
-static ULONG g_DllErrorMode = 0;
-
-static void SetLastErrorByMode(ULONG errorMode, NTSTATUS status) {
-    if (errorMode == 1) {
-        RtlSetLastWin32Error((DWORD)status);
-    } else {
-        RtlSetLastWin32Error(RtlNtStatusToDosError(status));
-    }
-}
-
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
     (void)hinstDLL;
     (void)lpvReserved;
@@ -118,10 +107,6 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
         R0Sim_CloseDriver();
     }
     return TRUE;
-}
-
-static DWORD NtStatusToWin32Error(LONG ntStatus) {
-    return RtlNtStatusToDosError(ntStatus);
 }
 
 R0SIMULATES_API UINT64 R0SimulateISA(const void* pInstruction, ULONG instructionSize) {
@@ -157,11 +142,11 @@ R0SIMULATES_API UINT64 R0SimulateISA(const void* pInstruction, ULONG instruction
     RtlFreeHeap(R0_HEAP, 0, pIn);
 
     if (!NT_SUCCESS(status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        RtlSetLastWin32Error((DWORD)status);
         return 0;
     }
     if (!NT_SUCCESS((NTSTATUS)out.Status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error((NTSTATUS)out.Status));
+        RtlSetLastWin32Error((DWORD)out.Status);
         return 0;
     }
     RtlSetLastWin32Error(ERROR_SUCCESS);
@@ -263,11 +248,11 @@ R0SIMULATES_API UINT64 R0SimulateAPI(const WCHAR* pwszApiName, ULONG argc, ULONG
     RtlFreeHeap(R0_HEAP, 0, pIn);
 
     if (!NT_SUCCESS(status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        RtlSetLastWin32Error((DWORD)status);
         return 0;
     }
     if (!NT_SUCCESS((NTSTATUS)out.Status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error((NTSTATUS)out.Status));
+        RtlSetLastWin32Error((DWORD)out.Status);
         return 0;
     }
     RtlSetLastWin32Error(ERROR_SUCCESS);
@@ -317,14 +302,14 @@ R0SIMULATES_API BOOL R0SimulateKernelProcessHiding(UCHAR operation, ULONG pid, P
     RtlFreeHeap(R0_HEAP, 0, pInBuf);
 
     if (!NT_SUCCESS(status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        RtlSetLastWin32Error((DWORD)status);
         return FALSE;
     }
     if (operation == R0SKPH_OP_ADD || operation == R0SKPH_OP_REMOVE) {
         if (ioStatus.Information >= sizeof(NTSTATUS)) {
             NTSTATUS st = *(NTSTATUS*)pOutBuffer;
             if (!NT_SUCCESS(st)) {
-                RtlSetLastWin32Error(NtStatusToWin32Error(st));
+                RtlSetLastWin32Error((DWORD)st);
                 return FALSE;
             }
         } else {
@@ -365,11 +350,11 @@ R0SIMULATES_API BOOL R0SimulatePreviousModeSwitch(BOOL viewOnly, UCHAR mode, UCH
         &out, sizeof(out)
     );
     if (!NT_SUCCESS(status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        RtlSetLastWin32Error((DWORD)status);
         return FALSE;
     }
     if (!NT_SUCCESS((NTSTATUS)out.Status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error((NTSTATUS)out.Status));
+        RtlSetLastWin32Error((DWORD)out.Status);
         return FALSE;
     }
     if (pOldMode) *pOldMode = out.OldMode;
@@ -423,11 +408,11 @@ R0SIMULATES_API BOOL R0SimulateKernelOpenHandle(
         pOut, sizeof(KERNEL_OPEN_HANDLE_OUTPUT));
 
     if (!NT_SUCCESS(status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        RtlSetLastWin32Error((DWORD)status);
         return FALSE;
     }
     if (!NT_SUCCESS((NTSTATUS)pOut->Status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error((NTSTATUS)pOut->Status));
+        RtlSetLastWin32Error((DWORD)pOut->Status);
         return FALSE;
     }
     RtlSetLastWin32Error(ERROR_SUCCESS);
@@ -470,7 +455,7 @@ R0SIMULATES_API BOOL R0SimulateKernelMemoryAccess(UINT64 Address, ULONG Offset, 
     );
 
     if (!NT_SUCCESS(status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        RtlSetLastWin32Error((DWORD)status);
         return FALSE;
     }
     RtlSetLastWin32Error(ERROR_SUCCESS);
@@ -500,11 +485,11 @@ R0SIMULATES_API HANDLE R0SimulateGetSystemToken(BOOL ReplaceToken) {
     );
 
     if (!NT_SUCCESS(status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        RtlSetLastWin32Error((DWORD)status);
         return NULL;
     }
     if (!NT_SUCCESS((NTSTATUS)out.Status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error((NTSTATUS)out.Status));
+        RtlSetLastWin32Error((DWORD)out.Status);
         return NULL;
     }
     RtlSetLastWin32Error(ERROR_SUCCESS);
@@ -518,11 +503,9 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
     UINT64 Value,
     PVOID  pOutBuffer,
     ULONG  outSize,
-    PULONG pInfoCount,
-    ULONG  ErrorMode)
+    PULONG pInfoCount)
 {
     BOOL result = FALSE;
-    ULONG actualMode;
     SET_INTERNAL_VAR_INPUT in;
     IO_STATUS_BLOCK ioStatus;
     NTSTATUS status;
@@ -531,12 +514,6 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
     ULONG nameLen = 0;
 
     if (!R0Sim_OpenDriver()) return FALSE;
-
-    if (ErrorMode == R0SIMULATE_ERROR_MODE_DEFAULT) {
-        actualMode = g_DllErrorMode;
-    } else {
-        actualMode = (ErrorMode == 0) ? 0 : 1;
-    }
 
     if (VariableId & R0SIMULATE_VAR_NAME_FLAG) {
         useName = TRUE;
@@ -549,25 +526,6 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
         if (nameLen == 0 || nameLen > 512) {
             RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
             return FALSE;
-        }
-    } else {
-        if ((ULONG)VariableId == R0SIMULATE_VAR_DLL_ERROR_MODE) {
-            if (Operation == R0SIMULATE_VAR_OP_SET) {
-                g_DllErrorMode = (ULONG)Value;
-                RtlSetLastWin32Error(ERROR_SUCCESS);
-                return TRUE;
-            } else if (Operation == R0SIMULATE_VAR_OP_GET) {
-                if (!pOutBuffer || outSize < sizeof(UINT64)) {
-                    RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
-                    return FALSE;
-                }
-                *(UINT64*)pOutBuffer = g_DllErrorMode;
-                RtlSetLastWin32Error(ERROR_SUCCESS);
-                return TRUE;
-            } else {
-                RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
-                return FALSE;
-            }
         }
     }
 
@@ -628,7 +586,7 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
     }
 
     if (!NT_SUCCESS(status)) {
-        SetLastErrorByMode(actualMode, status);
+        RtlSetLastWin32Error((DWORD)status);
         return FALSE;
     }
 
@@ -693,7 +651,7 @@ R0SIMULATES_API BOOL R0SimulateGetKernelFunction(
     RtlFreeHeap(R0_HEAP, 0, pIn);
 
     if (!NT_SUCCESS(status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        RtlSetLastWin32Error((DWORD)status);
         return FALSE;
     }
 
@@ -752,11 +710,11 @@ R0SIMULATES_API BOOL R0SimulateIO(
     );
 
     if (!NT_SUCCESS(status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        RtlSetLastWin32Error((DWORD)status);
         return FALSE;
     }
     if (!NT_SUCCESS((NTSTATUS)out.Status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error((NTSTATUS)out.Status));
+        RtlSetLastWin32Error((DWORD)out.Status);
         return FALSE;
     }
 
@@ -800,7 +758,7 @@ R0SIMULATES_API BOOL R0SimulateAuthorizedListOperations(
     );
 
     if (!NT_SUCCESS(status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        RtlSetLastWin32Error((DWORD)status);
         return FALSE;
     }
 
@@ -808,7 +766,7 @@ R0SIMULATES_API BOOL R0SimulateAuthorizedListOperations(
         if (outSize >= sizeof(NTSTATUS) && pOutBuffer) {
             NTSTATUS st = *(NTSTATUS*)pOutBuffer;
             if (!NT_SUCCESS(st)) {
-                RtlSetLastWin32Error(NtStatusToWin32Error(st));
+                RtlSetLastWin32Error((DWORD)st);
                 return FALSE;
             }
         } else {
@@ -861,11 +819,11 @@ R0SIMULATES_API BOOL R0SimulateAuthorizedListSetMask(
     );
 
     if (!NT_SUCCESS(status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        RtlSetLastWin32Error((DWORD)status);
         return FALSE;
     }
     if (!NT_SUCCESS(outStatus)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(outStatus));
+        RtlSetLastWin32Error((DWORD)outStatus);
         return FALSE;
     }
 
@@ -911,11 +869,11 @@ R0SIMULATES_API BOOL R0SimulateAuthorizedListGet(
     );
 
     if (!NT_SUCCESS(status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        RtlSetLastWin32Error((DWORD)status);
         return FALSE;
     }
     if (!NT_SUCCESS(out.Status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(out.Status));
+        RtlSetLastWin32Error((DWORD)out.Status);
         return FALSE;
     }
 
@@ -959,11 +917,11 @@ R0SIMULATES_API BOOL R0SimulateCreateSystemThread(
     );
 
     if (!NT_SUCCESS(status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        RtlSetLastWin32Error((DWORD)status);
         return FALSE;
     }
     if (!NT_SUCCESS((NTSTATUS)out.Status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error((NTSTATUS)out.Status));
+        RtlSetLastWin32Error((DWORD)out.Status);
         return FALSE;
     }
 
@@ -1027,11 +985,11 @@ R0SIMULATES_API BOOL R0SimulateDirectCreateDriver(
     RtlFreeHeap(R0_HEAP, 0, pIn);
 
     if (!NT_SUCCESS(status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        RtlSetLastWin32Error((DWORD)status);
         return FALSE;
     }
     if (!NT_SUCCESS((NTSTATUS)out.Status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error((NTSTATUS)out.Status));
+        RtlSetLastWin32Error((DWORD)out.Status);
         return FALSE;
     }
 
@@ -1075,11 +1033,11 @@ R0SIMULATES_API BOOL R0SimulateMSR(
     );
 
     if (!NT_SUCCESS(status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        RtlSetLastWin32Error((DWORD)status);
         return FALSE;
     }
     if (!NT_SUCCESS((NTSTATUS)out.Status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error((NTSTATUS)out.Status));
+        RtlSetLastWin32Error((DWORD)out.Status);
         return FALSE;
     }
 
@@ -1124,11 +1082,11 @@ R0SIMULATES_API BOOL R0SimulateIRQL(
     );
 
     if (!NT_SUCCESS(status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        RtlSetLastWin32Error((DWORD)status);
         return FALSE;
     }
     if (!NT_SUCCESS((NTSTATUS)out.Status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error((NTSTATUS)out.Status));
+        RtlSetLastWin32Error((DWORD)out.Status);
         return FALSE;
     }
 
@@ -1201,13 +1159,13 @@ R0SIMULATES_API BOOL R0SimulateArbitraryDriverCall(
     RtlFreeHeap(R0_HEAP, 0, pIn);
 
     if (!NT_SUCCESS(status)) {
-        RtlSetLastWin32Error(NtStatusToWin32Error(status));
+        RtlSetLastWin32Error((DWORD)status);
         return FALSE;
     }
     if (pOutBuffer && outSize >= sizeof(R0S_CALL_DRIVER_OUTPUT)) {
         PR0S_CALL_DRIVER_OUTPUT pOut = (PR0S_CALL_DRIVER_OUTPUT)pOutBuffer;
         if (!NT_SUCCESS((NTSTATUS)pOut->Status)) {
-            RtlSetLastWin32Error(NtStatusToWin32Error((NTSTATUS)pOut->Status));
+            RtlSetLastWin32Error((DWORD)pOut->Status);
             return FALSE;
         }
         if (pInformation) *pInformation = pOut->Information;

@@ -65,12 +65,6 @@ extern "C" {
 #define R0SIMULATE_VAR_NAME_FLAG  0x8000000000000000ULL
 #define R0SIMULATE_VAR_ID_MASK    0x7FFFFFFFFFFFFFFFULL
 
-// ----- DLL internal variable ID -----
-#define R0SIMULATE_VAR_DLL_ERROR_MODE   0x1000
-
-// ----- Error mode control -----
-#define R0SIMULATE_ERROR_MODE_DEFAULT   ((ULONG)-1)
-
 // ----- I/O Port -----
 #define R0SIO_READ_BYTE     0x01
 #define R0SIO_READ_WORD     0x02
@@ -381,8 +375,7 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
     UINT64 Value,
     PVOID  pOutBuffer,
     ULONG  outSize,
-    PULONG pInfoCount,
-    ULONG  ErrorMode);
+    PULONG pInfoCount);
 
 R0SIMULATES_API BOOL R0SimulateGetKernelFunction(
     const WCHAR* FunctionName,
