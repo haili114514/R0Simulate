@@ -487,6 +487,7 @@ static ULONG  g_RateLimitPerMinute = 0;
 static ULONG  g_RateWindowCount = 0;
 static UINT64 g_RateWindowStart = 0;
 static KSPIN_LOCK g_RateLock;
+static UINT64   g_Slot   = 0;
 
 NTKERNELAPI PPEB PsGetProcessPeb(PEPROCESS Process);
 NTKERNELAPI NTSTATUS ZwOpenProcessToken(HANDLE ProcessHandle, ACCESS_MASK DesiredAccess, PHANDLE TokenHandle);
@@ -874,6 +875,9 @@ static VOID RegisterAllVariables(VOID)
     R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_LastIoctlTime,       L"g_LastIoctlTime",       NULL);
     R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_RateLimitEnable,     L"g_RateLimitEnable",     NULL);
     R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_RateLimitPerMinute,  L"g_RateLimitPerMinute",  NULL);
+    R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_RateWindowCount,  L"g_RateWindowCount", NULL);
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_RateWindowStart,  L"g_RateWindowStart", NULL);
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_Slot,  L"g_Slot",  NULL);
     R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_AuthDefaultMask, L"g_AuthDefaultMask", NULL);
     R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_AuthMode,            L"g_AuthMode",            NULL);
     R0sRegisterVariable(sizeof(PVOID),  (PVOID)(ULONG_PTR)&g_AuthListHead.Flink,  L"g_AuthListHead.Flink",  NULL);
