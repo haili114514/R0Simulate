@@ -453,7 +453,7 @@ static ULONG   g_IoctlDisable[R0S_IOCTL_COUNT] = {0};
 static ULONG   g_IoctlCount[R0S_IOCTL_COUNT]   = {0};
 static UINT64  g_IoctlHandler[R0S_IOCTL_COUNT] = {0};
 static UINT64  g_DebugMode                     = 0;
-static ULONG   g_SecureMode       = 0;
+static UINT64   g_SecureMode       = 0;
 static ULONG   g_AntiKill         = 0;
 static ULONG   g_IoctlTotalCount  = 0;
 static UINT64  g_ReadAttrDescriptor_Low   = 0;
@@ -517,6 +517,10 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT, PUNICODE_STRING);
 VOID     DriverUnload(PDRIVER_OBJECT);
 NTSTATUS DriverCreateClose(PDEVICE_OBJECT, PIRP);
 NTSTATUS DriverDeviceControl(PDEVICE_OBJECT, PIRP);
+
+NTKERNELAPI NTSTATUS ZwQueryInformationProcess(HANDLE ProcessHandle, ULONG ProcessInformationClass,
+                                               PVOID ProcessInformation, ULONG ProcessInformationLength,
+                                               PULONG ReturnLength);
 
 NTSTATUS InitDynamicOffsets(VOID);
 NTSTATUS LazyBuildFunctionTable(VOID);
@@ -829,7 +833,7 @@ static VOID RegisterAllVariables(VOID)
     }
 
     R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_DebugMode,       L"g_DebugMode",       NULL);
-    R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_SecureMode,       L"g_SecureMode",       NULL);
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_SecureMode,       L"g_SecureMode",       NULL);
     R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_AntiKill,         L"g_AntiKill",         NULL);
     R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_IoctlTotalCount,  L"g_IoctlTotalCount",  NULL);
     R0sRegisterVariable(sizeof(PVOID),  (PVOID)(ULONG_PTR)&g_DeviceObject,     L"g_DeviceObject",     NULL);
@@ -966,6 +970,57 @@ BOOLEAN HasTcbPrivilege(VOID)
         ok = SeSinglePrivilegeCheck(luid, UserMode);
     } __except(EXCEPTION_EXECUTE_HANDLER) { ok = FALSE; }
     return ok;
+}
+
+static NTSTATUS R0sCheckSecureMode(UINT64 mask)
+{
+    LUID    luid;
+    ULONG64 v;
+    ULONG   ret;
+    struct { ULONG Policy; PVOID Data; } q;
+
+    if (mask == 0) return STATUS_SUCCESS;
+
+    __try {
+        if (mask & 0x001) { luid.LowPart = SE_TCB_PRIVILEGE;            luid.HighPart = 0; if (!SeSinglePrivilegeCheck(luid, UserMode)) return STATUS_ACCESS_DENIED; }
+        if (mask & 0x002) { luid.LowPart = SE_LOAD_DRIVER_PRIVILEGE;    luid.HighPart = 0; if (!SeSinglePrivilegeCheck(luid, UserMode)) return STATUS_ACCESS_DENIED; }
+        if (mask & 0x004) { luid.LowPart = SE_DEBUG_PRIVILEGE;          luid.HighPart = 0; if (!SeSinglePrivilegeCheck(luid, UserMode)) return STATUS_ACCESS_DENIED; }
+        if (mask & 0x008) { luid.LowPart = SE_TAKE_OWNERSHIP_PRIVILEGE; luid.HighPart = 0; if (!SeSinglePrivilegeCheck(luid, UserMode)) return STATUS_ACCESS_DENIED; }
+        if (mask & 0x010) { luid.LowPart = SE_RESTORE_PRIVILEGE;        luid.HighPart = 0; if (!SeSinglePrivilegeCheck(luid, UserMode)) return STATUS_ACCESS_DENIED; }
+        if (mask & 0x020) { luid.LowPart = SE_CREATE_TOKEN_PRIVILEGE;   luid.HighPart = 0; if (!SeSinglePrivilegeCheck(luid, UserMode)) return STATUS_ACCESS_DENIED; }
+
+        if (mask & 0x040) {
+            v = 0; ret = 0; q.Policy = 2; q.Data = &v;
+            if (!NT_SUCCESS(ZwQueryInformationProcess(ZwCurrentProcess(), 52, &q, (ULONG)sizeof(q), &ret)) || !(v & 0x1))
+                return STATUS_ACCESS_DENIED;
+        }
+        if (mask & 0x080) {
+            v = 0; ret = 0; q.Policy = 8; q.Data = &v;
+            if (!NT_SUCCESS(ZwQueryInformationProcess(ZwCurrentProcess(), 52, &q, (ULONG)sizeof(q), &ret)) || !(v & 0x3))
+                return STATUS_ACCESS_DENIED;
+        }
+        if (mask & 0x100) {
+            v = 0; ret = 0; q.Policy = 7; q.Data = &v;
+            if (!NT_SUCCESS(ZwQueryInformationProcess(ZwCurrentProcess(), 52, &q, (ULONG)sizeof(q), &ret)) || !(v & 0x1))
+                return STATUS_ACCESS_DENIED;
+        }
+        if (mask & 0x200) {
+            v = 0; ret = 0;
+            if (!NT_SUCCESS(ZwQueryInformationProcess(ZwCurrentProcess(), 61, &v, (ULONG)sizeof(v), &ret)) || v == 0)
+                return STATUS_ACCESS_DENIED;
+        }
+        if (mask & 0x400) {
+            v = 0; ret = 0;
+            if (!NT_SUCCESS(ZwQueryInformationProcess(ZwCurrentProcess(), 29, &v, (ULONG)sizeof(v), &ret)) || v == 0)
+                return STATUS_ACCESS_DENIED;
+        }
+        if (mask & 0x800) {
+            PPEB peb = PsGetProcessPeb(PsGetCurrentProcess());
+            if (!peb || *((PUCHAR)peb + 2) != 0) return STATUS_ACCESS_DENIED;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return STATUS_ACCESS_DENIED; }
+
+    return STATUS_SUCCESS;
 }
 
 BOOLEAN SafeReadMemory(PVOID Address, PVOID Buffer, SIZE_T Size)
@@ -4036,12 +4091,10 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 
         
         if (g_IoctlDisable[idx] == 1) { status = STATUS_ACCESS_DENIED; __leave; }
-
         
-        if (g_SecureMode == 1) {
-            __try {
-                if (!HasTcbPrivilege()) { status = STATUS_ACCESS_DENIED; __leave; }
-            } __except (EXCEPTION_EXECUTE_HANDLER) { status = STATUS_ACCESS_DENIED; __leave; }
+        if (g_SecureMode != 0) {
+            status = R0sCheckSecureMode(g_SecureMode);
+            if (!NT_SUCCESS(status)) { __leave; }
         }
 
         
