@@ -727,157 +727,133 @@ R0SIMULATES_API BOOL R0SimulateIO(
 R0SIMULATES_API BOOL R0SimulateAuthorizedListOperations(
     ULONG  operation,
     ULONG  pid,
+    UINT64 mask,
+    ULONG  getType,
     PVOID  pOutBuffer,
     ULONG  outSize,
     PULONG pInfoCount)
 {
     BOOL result = FALSE;
-    R0S_AUTH_LIST_INPUT in;
-    IO_STATUS_BLOCK ioStatus;
-    NTSTATUS status;
-
-    if (!R0Sim_OpenDriver()) return FALSE;
-    if (operation != R0SAUTH_OP_ADD &&
-        operation != R0SAUTH_OP_REMOVE &&
-        operation != R0SAUTH_OP_LIST) {
-        RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
-        return FALSE;
-    }
-
-    memset(&in, 0, sizeof(in));
-    in.Operation = operation;
-    in.Pid       = pid;
-
-    memset(&ioStatus, 0, sizeof(ioStatus));
-
-    status = NtDeviceIoControlFile(
-        g_hDriver, NULL, NULL, NULL, &ioStatus,
-        IOCTL_R0SIMULATE_AUTHORIZED_LIST,
-        &in, sizeof(in),
-        pOutBuffer, outSize
-    );
-
-    if (!NT_SUCCESS(status)) {
-        RtlSetLastWin32Error((DWORD)status);
-        return FALSE;
-    }
-
-    if (operation == R0SAUTH_OP_ADD || operation == R0SAUTH_OP_REMOVE) {
-        if (outSize >= sizeof(NTSTATUS) && pOutBuffer) {
-            NTSTATUS st = *(NTSTATUS*)pOutBuffer;
-            if (!NT_SUCCESS(st)) {
-                RtlSetLastWin32Error((DWORD)st);
-                return FALSE;
-            }
-        } else {
-            RtlSetLastWin32Error(ERROR_GEN_FAILURE);
-            return FALSE;
-        }
-    } else {
-        if (pInfoCount) {
-            if (outSize >= sizeof(ULONG) && pOutBuffer) {
-                *pInfoCount = *(PULONG)pOutBuffer;
-            } else {
-                *pInfoCount = 0;
-            }
-        }
-    }
-
-    RtlSetLastWin32Error(ERROR_SUCCESS);
-    result = TRUE;
-    return result;
-}
-
-R0SIMULATES_API BOOL R0SimulateAuthorizedListSetMask(
-    ULONG  pid,
-    UINT64 mask)
-{
-    BOOL result = FALSE;
-    R0S_AUTH_SET_INPUT in;
+    PVOID pInBuf = NULL;
+    PVOID outBuf = NULL;
+    ULONG inSize = 0;
+    ULONG outBufSize = 0;
+    R0S_AUTH_GET_OUTPUT getOut;
     NTSTATUS outStatus = 0;
     IO_STATUS_BLOCK ioStatus;
     NTSTATUS status;
 
     if (!R0Sim_OpenDriver()) return FALSE;
-    if (pid == 0) {
+
+    if (operation != R0SAUTH_OP_ADD &&
+        operation != R0SAUTH_OP_REMOVE &&
+        operation != R0SAUTH_OP_LIST &&
+        operation != R0SAUTH_OP_SET &&
+        operation != R0SAUTH_OP_GET) {
         RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
 
-    memset(&in, 0, sizeof(in));
-    in.Base.Operation = R0SAUTH_OP_SET;
-    in.Base.Pid       = pid;
-    in.Mask           = mask;
+    if (operation != R0SAUTH_OP_LIST && pid == 0) {
+        RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (operation == R0SAUTH_OP_GET) {
+        if (getType != R0SAUTH_GET_MASK && getType != R0SAUTH_GET_EXITSTATUS) {
+            RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        if (!pOutBuffer || outSize < sizeof(UINT64)) {
+            RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+    }
+
+    if (operation == R0SAUTH_OP_LIST) {
+        if (!pOutBuffer || outSize < sizeof(R0S_AUTH_LIST_OUTPUT)) {
+            RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+    }
+
+    if (operation == R0SAUTH_OP_SET) {
+        inSize = sizeof(R0S_AUTH_SET_INPUT);
+    } else if (operation == R0SAUTH_OP_GET) {
+        inSize = sizeof(R0S_AUTH_GET_INPUT);
+    } else {
+        inSize = sizeof(R0S_AUTH_LIST_INPUT);
+    }
+
+    pInBuf = RtlAllocateHeap(R0_HEAP, HEAP_ZERO_MEMORY, inSize);
+    if (!pInBuf) {
+        RtlSetLastWin32Error(ERROR_OUTOFMEMORY);
+        return FALSE;
+    }
+
+    if (operation == R0SAUTH_OP_SET) {
+        PR0S_AUTH_SET_INPUT pIn = (PR0S_AUTH_SET_INPUT)pInBuf;
+        pIn->Base.Operation = operation;
+        pIn->Base.Pid       = pid;
+        pIn->Mask           = mask;
+    } else if (operation == R0SAUTH_OP_GET) {
+        PR0S_AUTH_GET_INPUT pIn = (PR0S_AUTH_GET_INPUT)pInBuf;
+        pIn->Base.Operation = operation;
+        pIn->Base.Pid       = pid;
+        pIn->GetType        = getType;
+        pIn->Reserved       = 0;
+    } else {
+        PR0S_AUTH_LIST_INPUT pIn = (PR0S_AUTH_LIST_INPUT)pInBuf;
+        pIn->Operation = operation;
+        pIn->Pid       = pid;
+    }
 
     memset(&ioStatus, 0, sizeof(ioStatus));
+    memset(&getOut, 0, sizeof(getOut));
+
+    if (operation == R0SAUTH_OP_GET) {
+        outBuf     = &getOut;
+        outBufSize = sizeof(getOut);
+    } else if (operation == R0SAUTH_OP_LIST) {
+        outBuf     = pOutBuffer;
+        outBufSize = outSize;
+    } else {
+        outStatus  = STATUS_SUCCESS;
+        outBuf     = &outStatus;
+        outBufSize = sizeof(outStatus);
+    }
 
     status = NtDeviceIoControlFile(
         g_hDriver, NULL, NULL, NULL, &ioStatus,
         IOCTL_R0SIMULATE_AUTHORIZED_LIST,
-        &in, sizeof(in),
-        &outStatus, sizeof(outStatus)
+        pInBuf, inSize,
+        outBuf, outBufSize
     );
+
+    RtlFreeHeap(R0_HEAP, 0, pInBuf);
 
     if (!NT_SUCCESS(status)) {
         RtlSetLastWin32Error((DWORD)status);
         return FALSE;
     }
-    if (!NT_SUCCESS(outStatus)) {
-        RtlSetLastWin32Error((DWORD)outStatus);
-        return FALSE;
+
+    if (operation == R0SAUTH_OP_GET) {
+        if (!NT_SUCCESS(getOut.Status)) {
+            RtlSetLastWin32Error((DWORD)getOut.Status);
+            return FALSE;
+        }
+        *(UINT64*)pOutBuffer = getOut.Value;
+    } else if (operation == R0SAUTH_OP_LIST) {
+        if (pInfoCount) {
+            *pInfoCount = *(PULONG)pOutBuffer;
+        }
+    } else {
+        if (!NT_SUCCESS(outStatus)) {
+            RtlSetLastWin32Error((DWORD)outStatus);
+            return FALSE;
+        }
     }
 
-    RtlSetLastWin32Error(ERROR_SUCCESS);
-    result = TRUE;
-    return result;
-}
-
-R0SIMULATES_API BOOL R0SimulateAuthorizedListGet(
-    ULONG   pid,
-    ULONG   getType,
-    PUINT64 pOutValue)
-{
-    BOOL result = FALSE;
-    R0S_AUTH_GET_INPUT  in;
-    R0S_AUTH_GET_OUTPUT out;
-    IO_STATUS_BLOCK ioStatus;
-    NTSTATUS status;
-
-    if (!R0Sim_OpenDriver()) return FALSE;
-    if (pid == 0 || !pOutValue) {
-        RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
-        return FALSE;
-    }
-    if (getType != R0SAUTH_GET_MASK && getType != R0SAUTH_GET_EXITSTATUS) {
-        RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
-        return FALSE;
-    }
-
-    memset(&in, 0, sizeof(in));
-    in.Base.Operation = R0SAUTH_OP_GET;
-    in.Base.Pid       = pid;
-    in.GetType        = getType;
-
-    memset(&out, 0, sizeof(out));
-    memset(&ioStatus, 0, sizeof(ioStatus));
-
-    status = NtDeviceIoControlFile(
-        g_hDriver, NULL, NULL, NULL, &ioStatus,
-        IOCTL_R0SIMULATE_AUTHORIZED_LIST,
-        &in, sizeof(in),
-        &out, sizeof(out)
-    );
-
-    if (!NT_SUCCESS(status)) {
-        RtlSetLastWin32Error((DWORD)status);
-        return FALSE;
-    }
-    if (!NT_SUCCESS(out.Status)) {
-        RtlSetLastWin32Error((DWORD)out.Status);
-        return FALSE;
-    }
-
-    *pOutValue = out.Value;
     RtlSetLastWin32Error(ERROR_SUCCESS);
     result = TRUE;
     return result;

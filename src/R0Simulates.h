@@ -392,18 +392,11 @@ R0SIMULATES_API BOOL R0SimulateIO(
 R0SIMULATES_API BOOL R0SimulateAuthorizedListOperations(
     ULONG  operation,
     ULONG  pid,
+    UINT64 mask,
+    ULONG  getType,
     PVOID  pOutBuffer,
     ULONG  outSize,
     PULONG pInfoCount);
-
-R0SIMULATES_API BOOL R0SimulateAuthorizedListSetMask(
-    ULONG  pid,
-    UINT64 mask);
-
-R0SIMULATES_API BOOL R0SimulateAuthorizedListGet(
-    ULONG   pid,
-    ULONG   getType,
-    PUINT64 pOutValue);
 
 R0SIMULATES_API BOOL R0SimulateCreateSystemThread(
     UINT64  startRoutine,
