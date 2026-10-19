@@ -112,7 +112,7 @@ int main(int argc, char* argv[]) {
 
     cmd = argv[1];
 
-    if (strcmp(cmd, "list") == 0) {
+    if (_stricmp(cmd, "list") == 0) {
         UCHAR* buffer;
         ULONG infoCount = 0;
         ULONG count;
@@ -158,7 +158,7 @@ int main(int argc, char* argv[]) {
         free(buffer);
         result = TRUE;
     }
-    else if (strcmp(cmd, "get") == 0) {
+    else if (_stricmp(cmd, "get") == 0) {
         UINT64 varId = 0;
         WCHAR  resolvedName[64] = {0};
         WCHAR* allocatedName = NULL;
@@ -200,7 +200,7 @@ int main(int argc, char* argv[]) {
                    varId, varId, value, value);
         }
     }
-    else if (strcmp(cmd, "set") == 0) {
+    else if (_stricmp(cmd, "set") == 0) {
         UINT64 varId = 0;
         WCHAR  resolvedName[64] = {0};
         WCHAR* allocatedName = NULL;

@@ -263,20 +263,20 @@ int main(int argc, char** argv)
 {
     int rc;
     if (argc < 2) { usage(argv[0]); return 1; }
-    if      (strcmp(argv[1], "add")    == 0 && argc == 3)
+    if      (_stricmp(argv[1], "add")    == 0 && argc == 3)
         rc = cmd_add((ULONG)strtoul(argv[2], NULL, 0));
-    else if (strcmp(argv[1], "remove") == 0 && argc == 3)
+    else if (_stricmp(argv[1], "remove") == 0 && argc == 3)
         rc = cmd_remove((ULONG)strtoul(argv[2], NULL, 0));
-    else if (strcmp(argv[1], "set")    == 0 && argc == 4)
+    else if (_stricmp(argv[1], "set")    == 0 && argc == 4)
         rc = cmd_set((ULONG)strtoul(argv[2], NULL, 0),
                      (UINT64)strtoull(argv[3], NULL, 0));
-    else if (strcmp(argv[1], "get")    == 0 && argc == 4)
+    else if (_stricmp(argv[1], "get")    == 0 && argc == 4)
         rc = cmd_get((ULONG)strtoul(argv[2], NULL, 0), argv[3]);
-    else if (strcmp(argv[1], "list")       == 0) rc = cmd_list();
-    else if (strcmp(argv[1], "on")         == 0) rc = cmd_set_auth_mode(1);
-    else if (strcmp(argv[1], "off")        == 0) rc = cmd_set_auth_mode(0);
-    else if (strcmp(argv[1], "status")     == 0) rc = cmd_status();
-    else if (strcmp(argv[1], "start") == 0 && (argc == 3 || argc == 4)) {
+    else if (_stricmp(argv[1], "list")   == 0) rc = cmd_list();
+    else if (_stricmp(argv[1], "on")     == 0) rc = cmd_set_auth_mode(1);
+    else if (_stricmp(argv[1], "off")    == 0) rc = cmd_set_auth_mode(0);
+    else if (_stricmp(argv[1], "status") == 0) rc = cmd_status();
+    else if (_stricmp(argv[1], "start")  == 0 && (argc == 3 || argc == 4)) {
         if (argc == 4)
             rc = cmd_start(argv[2], (UINT64)strtoull(argv[3], NULL, 0), TRUE);
         else
