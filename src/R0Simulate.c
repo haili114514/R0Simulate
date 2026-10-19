@@ -4106,8 +4106,6 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 
         
         handler = (PFN_IOCTL_HANDLER)(ULONG_PTR)g_IoctlHandler[idx];
-        if (handler == NULL) { status = STATUS_NOT_IMPLEMENTED; __leave; }
-
         
         __try {
             status = handler(inputBuffer, inputSize, outputBuffer, outputSize, &info);
