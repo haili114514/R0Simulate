@@ -38,15 +38,10 @@ static void PrintWin32Error(const char* what)
 
 static int cmd_add(ULONG pid)
 {
-    NTSTATUS st = 0;
     if (pid == 0) { fprintf(stderr, "[!] invalid PID\n"); return 1; }
     if (!R0SimulateAuthorizedListOperations(R0SAUTH_OP_ADD, pid,
-                                             &st, sizeof(st), NULL)) {
+                                             0, 0, NULL, 0, NULL)) {
         PrintWin32Error("add");
-        return 1;
-    }
-    if (!NT_SUCCESS(st)) {
-        fprintf(stderr, "[!] kernel rejected, NTSTATUS=0x%08X\n", (unsigned)st);
         return 1;
     }
     printf("[+] added PID %lu (mask = g_AuthDefaultMask)\n", (unsigned long)pid);
@@ -55,15 +50,10 @@ static int cmd_add(ULONG pid)
 
 static int cmd_remove(ULONG pid)
 {
-    NTSTATUS st = 0;
     if (pid == 0) { fprintf(stderr, "[!] invalid PID\n"); return 1; }
     if (!R0SimulateAuthorizedListOperations(R0SAUTH_OP_REMOVE, pid,
-                                             &st, sizeof(st), NULL)) {
+                                             0, 0, NULL, 0, NULL)) {
         PrintWin32Error("remove");
-        return 1;
-    }
-    if (!NT_SUCCESS(st)) {
-        fprintf(stderr, "[!] kernel rejected, NTSTATUS=0x%08X\n", (unsigned)st);
         return 1;
     }
     printf("[+] removed PID %lu\n", (unsigned long)pid);
@@ -73,7 +63,8 @@ static int cmd_remove(ULONG pid)
 static int cmd_set(ULONG pid, UINT64 mask)
 {
     if (pid == 0) { fprintf(stderr, "[!] invalid PID\n"); return 1; }
-    if (!R0SimulateAuthorizedListSetMask(pid, mask)) {
+    if (!R0SimulateAuthorizedListOperations(R0SAUTH_OP_SET, pid,
+                                             mask, 0, NULL, 0, NULL)) {
         PrintWin32Error("set");
         return 1;
     }
@@ -102,7 +93,9 @@ static int cmd_get(ULONG pid, const char* what)
         return 1;
     }
 
-    if (!R0SimulateAuthorizedListGet(pid, getType, &value)) {
+    if (!R0SimulateAuthorizedListOperations(R0SAUTH_OP_GET, pid,
+                                             0, getType,
+                                             &value, sizeof(value), NULL)) {
         PrintWin32Error("get");
         return 1;
     }
@@ -128,6 +121,7 @@ static int cmd_list(void)
 
     memset(buf, 0, sizeof(buf));
     if (!R0SimulateAuthorizedListOperations(R0SAUTH_OP_LIST, 0,
+                                             0, 0,
                                              buf, (ULONG)sizeof(buf), &count)) {
         PrintWin32Error("list");
         return 1;
@@ -157,7 +151,6 @@ static int cmd_start(const char* cmdline, UINT64 mask, BOOL setMask)
     STARTUPINFOA        si = {0};
     PROCESS_INFORMATION pi = {0};
     char                cmdBuf[1024];
-    NTSTATUS            st = 0;
     DWORD               resumeRet;
     int                 failed = 0;
 
@@ -179,19 +172,15 @@ static int cmd_start(const char* cmdline, UINT64 mask, BOOL setMask)
            (unsigned long)pi.dwProcessId, (unsigned long)pi.dwThreadId);
 
     if (!R0SimulateAuthorizedListOperations(R0SAUTH_OP_ADD, pi.dwProcessId,
-                                             &st, sizeof(st), NULL)) {
+                                             0, 0, NULL, 0, NULL)) {
         PrintWin32Error("add");
-        failed = 1;
-        goto cleanup;
-    }
-    if (!NT_SUCCESS(st)) {
-        fprintf(stderr, "[!] ADD rejected, NTSTATUS=0x%08X\n", (unsigned)st);
         failed = 1;
         goto cleanup;
     }
 
     if (setMask) {
-        if (!R0SimulateAuthorizedListSetMask(pi.dwProcessId, mask)) {
+        if (!R0SimulateAuthorizedListOperations(R0SAUTH_OP_SET, pi.dwProcessId,
+                                                 mask, 0, NULL, 0, NULL)) {
             PrintWin32Error("set mask");
             failed = 1;
             goto cleanup;
