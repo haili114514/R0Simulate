@@ -45,6 +45,7 @@ extern "C" {
 #define R0SKPH_OP_ADD      0x10
 #define R0SKPH_OP_REMOVE   0x11
 #define R0SKPH_OP_LIST     0x12
+#define R0SKPH_OP_GET      0x13
 
 // ----- Memory Access -----
 #define R0SKMA_OP_READ     0
@@ -127,10 +128,22 @@ typedef struct _PROCESS_HIDING_INPUT {
     UCHAR   Reserved[3];
 } PROCESS_HIDING_INPUT, *PPROCESS_HIDING_INPUT;
 
-typedef struct _PROCESS_HIDING_LIST_OUTPUT {
-    ULONG   Count;
-    HANDLE  Pids[1];
-} PROCESS_HIDING_LIST_OUTPUT, *PPROCESS_HIDING_LIST_OUTPUT;
+typedef struct _R0S_HIDDEN_GET_OUTPUT {
+    NTSTATUS Status;
+    NTSTATUS ExitStatus;
+} R0S_HIDDEN_GET_OUTPUT, *PR0S_HIDDEN_GET_OUTPUT;
+
+typedef struct _R0S_HIDDEN_ENTRY_INFO {
+    HANDLE   Pid;
+    NTSTATUS ExitStatus;
+    ULONG    Reserved;
+} R0S_HIDDEN_ENTRY_INFO, *PR0S_HIDDEN_ENTRY_INFO;
+
+typedef struct _R0S_HIDDEN_LIST_OUTPUT {
+    ULONG  Count;
+    ULONG  Reserved;
+    R0S_HIDDEN_ENTRY_INFO Entries[1];
+} R0S_HIDDEN_LIST_OUTPUT, *PR0S_HIDDEN_LIST_OUTPUT;
 
 typedef struct _PREVIOUS_MODE_SWITCH_INPUT {
     UCHAR   Mode;

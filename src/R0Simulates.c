@@ -269,7 +269,33 @@ R0SIMULATES_API BOOL R0SimulateKernelProcessHiding(UCHAR operation, ULONG pid, P
     NTSTATUS status;
 
     if (!R0Sim_OpenDriver()) return FALSE;
-    if (operation != R0SKPH_OP_ADD && operation != R0SKPH_OP_REMOVE && operation != R0SKPH_OP_LIST) {
+
+    if (operation != R0SKPH_OP_ADD &&
+        operation != R0SKPH_OP_REMOVE &&
+        operation != R0SKPH_OP_GET &&
+        operation != R0SKPH_OP_LIST) {
+        RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (operation == R0SKPH_OP_GET) {
+        if (!pOutBuffer || outSize < sizeof(R0S_HIDDEN_GET_OUTPUT)) {
+            RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+    } else if (operation == R0SKPH_OP_LIST) {
+        if (!pOutBuffer || outSize < sizeof(R0S_HIDDEN_LIST_OUTPUT)) {
+            RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+    } else {
+        if (!pOutBuffer || outSize < sizeof(NTSTATUS)) {
+            RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+    }
+
+    if (operation != R0SKPH_OP_LIST && pid == 0) {
         RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
@@ -277,7 +303,7 @@ R0SIMULATES_API BOOL R0SimulateKernelProcessHiding(UCHAR operation, ULONG pid, P
     memset(&in, 0, sizeof(in));
     in.Operation = operation;
     inputSize = sizeof(PROCESS_HIDING_INPUT);
-    if (operation == R0SKPH_OP_ADD || operation == R0SKPH_OP_REMOVE) {
+    if (operation != R0SKPH_OP_LIST) {
         inputSize += sizeof(ULONG);
     }
 
@@ -287,7 +313,7 @@ R0SIMULATES_API BOOL R0SimulateKernelProcessHiding(UCHAR operation, ULONG pid, P
         return FALSE;
     }
     memcpy(pInBuf, &in, sizeof(PROCESS_HIDING_INPUT));
-    if (operation == R0SKPH_OP_ADD || operation == R0SKPH_OP_REMOVE) {
+    if (operation != R0SKPH_OP_LIST) {
         *(PULONG)(pInBuf + sizeof(PROCESS_HIDING_INPUT)) = pid;
     }
 
@@ -305,7 +331,14 @@ R0SIMULATES_API BOOL R0SimulateKernelProcessHiding(UCHAR operation, ULONG pid, P
         RtlSetLastWin32Error((DWORD)status);
         return FALSE;
     }
-    if (operation == R0SKPH_OP_ADD || operation == R0SKPH_OP_REMOVE) {
+
+    if (operation == R0SKPH_OP_GET) {
+        PR0S_HIDDEN_GET_OUTPUT pOut = (PR0S_HIDDEN_GET_OUTPUT)pOutBuffer;
+        if (!NT_SUCCESS(pOut->Status)) {
+            RtlSetLastWin32Error((DWORD)pOut->Status);
+            return FALSE;
+        }
+    } else if (operation == R0SKPH_OP_ADD || operation == R0SKPH_OP_REMOVE) {
         if (ioStatus.Information >= sizeof(NTSTATUS)) {
             NTSTATUS st = *(NTSTATUS*)pOutBuffer;
             if (!NT_SUCCESS(st)) {
@@ -317,6 +350,8 @@ R0SIMULATES_API BOOL R0SimulateKernelProcessHiding(UCHAR operation, ULONG pid, P
             return FALSE;
         }
     }
+    
+
     RtlSetLastWin32Error(ERROR_SUCCESS);
     result = TRUE;
     return result;
@@ -382,7 +417,7 @@ R0SIMULATES_API BOOL R0SimulateKernelOpenHandle(
         RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
-    
+
     if (Type != R0SKOH_TYPE_HANDLE &&
         Type != R0SKOH_TYPE_POINTER) {
         RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
