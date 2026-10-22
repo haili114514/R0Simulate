@@ -17,15 +17,15 @@
 
 #define IOCTL_R0SIMULATE_EXEC_INSTRUCTION           CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_CALL_KERNEL_API            CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_KERNEL_PROCESS_HIDING      CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_KERNEL_PROCESS_HIDING      CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_PREVIOUS_MODE_SWITCH       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_KERNEL_OPEN_HANDLE         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_KERNEL_MEMORY_ACCESS       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_GET_SYSTEM_TOKEN           CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_SET_INTERNAL_VARS          CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_SET_INTERNAL_VARS          CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_BUFFERED,  FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_IO                         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x809, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_AUTHORIZED_LIST            CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80A, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_AUTHORIZED_LIST            CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80A, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_CREATE_SYSTEM_THREAD       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80B, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_DIRECT_CREATE_DRIVER       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80C, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_MSR                        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80D, METHOD_NEITHER, FILE_ANY_ACCESS)
@@ -160,9 +160,15 @@ typedef struct _PROCESS_HIDING_INPUT {
     UCHAR   Reserved[3];
 } PROCESS_HIDING_INPUT, *PPROCESS_HIDING_INPUT;
 
+typedef struct _R0S_HIDDEN_GET_INPUT {
+    ULONG Pid;
+    ULONG GetType;
+} R0S_HIDDEN_GET_INPUT, *PR0S_HIDDEN_GET_INPUT;
+
 typedef struct _R0S_HIDDEN_GET_OUTPUT {
     NTSTATUS Status;
-    NTSTATUS ExitStatus;
+    ULONG    Reserved;
+    UINT64   Value;
 } R0S_HIDDEN_GET_OUTPUT, *PR0S_HIDDEN_GET_OUTPUT;
 
 typedef struct _R0S_HIDDEN_ENTRY_INFO {
@@ -2276,20 +2282,25 @@ NTSTATUS R0SimulateKernelProcessHiding(PVOID InputBuffer, ULONG InputSize,
         }
 
         if (op == R0SKPH_OP_GET) {
-            ULONG pid;
+            ULONG pid, getType;
             KIRQL oldIrql;
             PHIDDEN_PROCESS_ENTRY pEntry = NULL;
             PEPROCESS foundProc = NULL;
+            UINT64 outValue = 0;
             PLIST_ENTRY p;
             PR0S_HIDDEN_GET_OUTPUT pOut;
 
-            if (InputSize < sizeof(PROCESS_HIDING_INPUT) + sizeof(ULONG))
+            if (InputSize < sizeof(PROCESS_HIDING_INPUT) + sizeof(R0S_HIDDEN_GET_INPUT))
                 return STATUS_BUFFER_TOO_SMALL;
             if (OutputSize < sizeof(R0S_HIDDEN_GET_OUTPUT))
                 return STATUS_BUFFER_TOO_SMALL;
 
-            pid = *(ULONG*)((PUCHAR)InputBuffer + sizeof(PROCESS_HIDING_INPUT));
+            pid     = *(ULONG*)((PUCHAR)InputBuffer + sizeof(PROCESS_HIDING_INPUT));
+            getType = *(ULONG*)((PUCHAR)InputBuffer + sizeof(PROCESS_HIDING_INPUT) + sizeof(ULONG));
+
             if (pid == 0) return STATUS_INVALID_PARAMETER;
+            if (getType != R0SKPH_GET_EXITSTATUS && getType != R0SKPH_GET_EPROCESS)
+                return STATUS_INVALID_PARAMETER;
 
             KeAcquireSpinLock(&g_HiddenListLock, &oldIrql);
             __try {
@@ -2309,12 +2320,20 @@ NTSTATUS R0SimulateKernelProcessHiding(PVOID InputBuffer, ULONG InputSize,
 
             if (!pEntry) return STATUS_NOT_FOUND;
 
+            if (getType == R0SKPH_GET_EXITSTATUS) {
+                outValue = (UINT64)(ULONG)(
+                    (foundProc != NULL)
+                        ? PsGetProcessExitStatus(foundProc)
+                        : STATUS_PROCESS_IS_TERMINATING);
+            } else {
+                outValue = (UINT64)(ULONG_PTR)foundProc;
+            }
+
             pOut = (PR0S_HIDDEN_GET_OUTPUT)OutputBuffer;
             __try {
-                pOut->Status     = STATUS_SUCCESS;
-                pOut->ExitStatus = (foundProc != NULL)
-                                    ? PsGetProcessExitStatus(foundProc)
-                                    : STATUS_PROCESS_IS_TERMINATING;
+                pOut->Status   = STATUS_SUCCESS;
+                pOut->Reserved = 0;
+                pOut->Value    = outValue;
             }
             __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
 
