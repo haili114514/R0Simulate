@@ -511,7 +511,8 @@ test10_end:
 
         printf("  [11.1] LIST: enumerate authorized list\n");
         ok = R0SimulateAuthorizedListOperations(
-            R0SAUTH_OP_LIST, 0, buf, (ULONG)sizeof(buf), &count);
+            R0SAUTH_OP_LIST, 0, 0, 0,
+            buf, (ULONG)sizeof(buf), &count);
         if (!ok)
         {
             print_last_error("R0S AUTH LIST");
@@ -535,7 +536,8 @@ test10_end:
         {
             NTSTATUS st = 0;
             ok = R0SimulateAuthorizedListOperations(
-                R0SAUTH_OP_ADD, GetCurrentProcessId(), &st, sizeof(st), NULL);
+                R0SAUTH_OP_ADD, GetCurrentProcessId(), 0, 0,
+                &st, sizeof(st), NULL);
             if (ok && NT_SUCCESS(st))
                 printf("      OK: added\n");
             else
@@ -549,18 +551,24 @@ test10_end:
         memset(buf, 0, sizeof(buf));
         count = 0;
         ok = R0SimulateAuthorizedListOperations(
-            R0SAUTH_OP_LIST, 0, buf, (ULONG)sizeof(buf), &count);
+            R0SAUTH_OP_LIST, 0, 0, 0,
+            buf, (ULONG)sizeof(buf), &count);
         if (ok)
         {
             R0S_AUTH_LIST_OUTPUT* pOut = (R0S_AUTH_LIST_OUTPUT*)buf;
             printf("      OK: %lu entries\n", (unsigned long)pOut->Count);
+        }
+        else
+        {
+            print_last_error("R0S AUTH LIST again");
         }
 
         printf("  [11.4] REMOVE current process\n");
         {
             NTSTATUS st = 0;
             ok = R0SimulateAuthorizedListOperations(
-                R0SAUTH_OP_REMOVE, GetCurrentProcessId(), &st, sizeof(st), NULL);
+                R0SAUTH_OP_REMOVE, GetCurrentProcessId(), 0, 0,
+                &st, sizeof(st), NULL);
             if (ok && NT_SUCCESS(st))
                 printf("      OK: removed\n");
             else
