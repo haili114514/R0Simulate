@@ -2555,7 +2555,6 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
         op != R0SIMULATE_VAR_OP_LIST)
         return STATUS_INVALID_PARAMETER;
 
-    
     isPriv = (g_PrivilegedMode != 0) && R0sIsPrivileged(PsGetCurrentProcess());
 
     if (op == R0SIMULATE_VAR_OP_LIST) {
@@ -2657,6 +2656,12 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
             return STATUS_ACCESS_DENIED;
         if (!isPriv && op == R0SIMULATE_VAR_OP_SET &&
             R0S_ATTR_TEST(g_WriteAttrDescriptor_Low, g_WriteAttrDescriptor_High, bit))
+            return STATUS_ACCESS_DENIED;
+
+        if (!isPriv && op == R0SIMULATE_VAR_OP_SET &&
+            g_AuthMode != 0 &&
+            target->Address == (PVOID)(ULONG_PTR)&g_AuthDefaultMask &&
+            pIn->Value == R0S_MASK_PRIVILEGED)
             return STATUS_ACCESS_DENIED;
 
         if (op == R0SIMULATE_VAR_OP_GET) {
