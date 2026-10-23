@@ -3193,14 +3193,11 @@ NTSTATUS R0SimulateAuthorizedListOperations(PVOID InputBuffer, ULONG InputSize,
         KIRQL oldIrql;
         PLIST_ENTRY p;
         BOOLEAN exists = FALSE;
-        BOOLEAN callerIsPriv;
 
         if (pIn->Pid == 0) return STATUS_INVALID_PARAMETER;
 
         status = PsLookupProcessByProcessId((HANDLE)(ULONG_PTR)pIn->Pid, &pTarget);
         if (!NT_SUCCESS(status)) return status;
-
-        callerIsPriv = (g_PrivilegedMode != 0) && R0sIsPrivileged(PsGetCurrentProcess());
 
         KeAcquireSpinLock(&g_AuthListLock, &oldIrql);
         __try {
@@ -3220,13 +3217,7 @@ NTSTATUS R0SimulateAuthorizedListOperations(PVOID InputBuffer, ULONG InputSize,
         RtlZeroMemory(pEntry, sizeof(AUTH_ENTRY));
         pEntry->Pid     = (HANDLE)(ULONG_PTR)pIn->Pid;
         pEntry->Process = pTarget;
-
-        if ((g_SecureMode & 0x1000) && !callerIsPriv &&
-            g_AuthDefaultMask == R0S_MASK_PRIVILEGED) {
-            pEntry->IoctlMask = 0;
-        } else {
-            pEntry->IoctlMask = g_AuthDefaultMask;
-        }
+        pEntry->IoctlMask = g_AuthDefaultMask;
 
         KeAcquireSpinLock(&g_AuthListLock, &oldIrql);
         __try { InsertTailList(&g_AuthListHead, &pEntry->ListEntry); }
