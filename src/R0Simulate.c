@@ -61,6 +61,8 @@
 
 #define R0SIMULATE_FLAG_USE_ADDRESS  0x00000001
 
+#define R0S_MASK_PRIVILEGED   (~0ULL)
+
 #define R0SPMS_MODE_KERNEL   0x00
 #define R0SPMS_MODE_USER     0x01
 
@@ -476,12 +478,13 @@ static ULONG   g_DriverSize      = 0;
 static LIST_ENTRY   g_VarTableHead;
 static KSPIN_LOCK   g_VarTableLock;
 static ULONG        g_VarNextId = 1;
-static UINT64  g_AuthDefaultMask = 0;
+static ULONG g_PrivilegedMode = 1;
 static ULONG        g_AuthMode = 0;
+static UINT64  g_AuthDefaultMask = 0;
 static LIST_ENTRY   g_AuthListHead;
 static KSPIN_LOCK   g_AuthListLock;
 static ULONG g_VersionMajor    = 2;
-static ULONG g_VersionMinor    = 8;
+static ULONG g_VersionMinor    = 9;
 static ULONG g_VersionBuild    = 0;
 static ULONG g_VersionRevision = 0;
 static LIST_ENTRY   g_Win32kSsdtListHead;
@@ -875,8 +878,9 @@ static VOID RegisterAllVariables(VOID)
     R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_RateWindowCount,  L"g_RateWindowCount", NULL);
     R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_RateWindowStart,  L"g_RateWindowStart", NULL);
     R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_Slot,  L"g_Slot",  NULL);
-    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_AuthDefaultMask, L"g_AuthDefaultMask", NULL);
+    R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_PrivilegedMode,            L"g_PrivilegedMode",            NULL);
     R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_AuthMode,            L"g_AuthMode",            NULL);
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_AuthDefaultMask, L"g_AuthDefaultMask", NULL);
     R0sRegisterVariable(sizeof(PVOID),  (PVOID)(ULONG_PTR)&g_AuthListHead.Flink,  L"g_AuthListHead.Flink",  NULL);
     R0sRegisterVariable(sizeof(PVOID),  (PVOID)(ULONG_PTR)&g_AuthListHead.Blink,  L"g_AuthListHead.Blink",  NULL);
     R0sRegisterVariable(sizeof(PVOID),  (PVOID)(ULONG_PTR)&g_AuthListLock,        L"g_AuthListLock",        NULL);
@@ -896,6 +900,30 @@ static VOID RegisterAllVariables(VOID)
                                 L"g_DeviceFlags", NULL);
         } __except(EXCEPTION_EXECUTE_HANDLER) { }
     }
+}
+
+static BOOLEAN R0sIsPrivileged(PEPROCESS proc)
+{
+    KIRQL       oldIrql;
+    PLIST_ENTRY p;
+    BOOLEAN     found = FALSE;
+
+    if (!proc) return FALSE;
+
+    KeAcquireSpinLock(&g_AuthListLock, &oldIrql);
+    __try {
+        p = g_AuthListHead.Flink;
+        while (p != &g_AuthListHead) {
+            PAUTH_ENTRY e = CONTAINING_RECORD(p, AUTH_ENTRY, ListEntry);
+            if (e->Process == proc) {
+                found = (e->IoctlMask == R0S_MASK_PRIVILEGED);
+                break;
+            }
+            p = p->Flink;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { found = FALSE; }
+    KeReleaseSpinLock(&g_AuthListLock, oldIrql);
+    return found;
 }
 
 static BOOLEAN R0sIsIoctlAuthorized(ULONG idx)
@@ -2515,6 +2543,7 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
     NTSTATUS status = STATUS_SUCCESS;
     PSET_INTERNAL_VAR_INPUT pIn;
     ULONG op;
+    BOOLEAN isPriv;
 
     if (!InputBuffer || InputSize < sizeof(SET_INTERNAL_VAR_INPUT))
         return STATUS_INVALID_PARAMETER;
@@ -2525,6 +2554,9 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
         op != R0SIMULATE_VAR_OP_SET &&
         op != R0SIMULATE_VAR_OP_LIST)
         return STATUS_INVALID_PARAMETER;
+
+    
+    isPriv = (g_PrivilegedMode != 0) && R0sIsPrivileged(PsGetCurrentProcess());
 
     if (op == R0SIMULATE_VAR_OP_LIST) {
         ULONG count = 0;
@@ -2539,7 +2571,8 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
             for (p = g_VarTableHead.Flink; p != &g_VarTableHead; p = p->Flink) {
                 PVAR_TABLE_ENTRY e = CONTAINING_RECORD(p, VAR_TABLE_ENTRY, ListEntry);
                 ULONG bit = e->Id - 1;
-                if (R0S_ATTR_TEST(g_HideAttrDescriptor_Low, g_HideAttrDescriptor_High, bit))
+                if (!isPriv &&
+                    R0S_ATTR_TEST(g_HideAttrDescriptor_Low, g_HideAttrDescriptor_High, bit))
                     continue;
                 count++;
             }
@@ -2568,7 +2601,8 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
                 PVAR_TABLE_ENTRY e = CONTAINING_RECORD(p, VAR_TABLE_ENTRY, ListEntry);
                 UINT64 val = 0;
                 ULONG  bit = e->Id - 1;
-                if (R0S_ATTR_TEST(g_HideAttrDescriptor_Low, g_HideAttrDescriptor_High, bit)) {
+                if (!isPriv &&
+                    R0S_ATTR_TEST(g_HideAttrDescriptor_Low, g_HideAttrDescriptor_High, bit)) {
                     p = p->Flink;
                     continue;
                 }
@@ -2576,7 +2610,8 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
                 pOutVar[idx].Id   = e->Id;
                 pOutVar[idx].Size = e->Size;
 
-                if (R0S_ATTR_TEST(g_ReadAttrDescriptor_Low, g_ReadAttrDescriptor_High, bit)) {
+                if (!isPriv &&
+                    R0S_ATTR_TEST(g_ReadAttrDescriptor_Low, g_ReadAttrDescriptor_High, bit)) {
                     val = 0xC0000022ULL;
                 } else {
                     __try {
@@ -2617,10 +2652,10 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
 
         bit = target->Id - 1;
 
-        if (op == R0SIMULATE_VAR_OP_GET &&
+        if (!isPriv && op == R0SIMULATE_VAR_OP_GET &&
             R0S_ATTR_TEST(g_ReadAttrDescriptor_Low, g_ReadAttrDescriptor_High, bit))
             return STATUS_ACCESS_DENIED;
-        if (op == R0SIMULATE_VAR_OP_SET &&
+        if (!isPriv && op == R0SIMULATE_VAR_OP_SET &&
             R0S_ATTR_TEST(g_WriteAttrDescriptor_Low, g_WriteAttrDescriptor_High, bit))
             return STATUS_ACCESS_DENIED;
 
@@ -3199,19 +3234,31 @@ NTSTATUS R0SimulateAuthorizedListOperations(PVOID InputBuffer, ULONG InputSize,
         KIRQL oldIrql;
         PAUTH_ENTRY pEntry = NULL;
         PLIST_ENTRY p;
+        BOOLEAN frozen = FALSE;
+        BOOLEAN callerIsPriv;
+
+        callerIsPriv = (g_PrivilegedMode != 0) && R0sIsPrivileged(PsGetCurrentProcess());
 
         KeAcquireSpinLock(&g_AuthListLock, &oldIrql);
         __try {
             p = g_AuthListHead.Flink;
             while (p != &g_AuthListHead) {
                 PAUTH_ENTRY e = CONTAINING_RECORD(p, AUTH_ENTRY, ListEntry);
-                if ((ULONG)(ULONG_PTR)e->Pid == pIn->Pid) { pEntry = e; break; }
+                if ((ULONG)(ULONG_PTR)e->Pid == pIn->Pid) {
+                    if (g_AuthMode != 0 && !callerIsPriv && e->IoctlMask == R0S_MASK_PRIVILEGED) {
+                        frozen = TRUE;
+                    } else {
+                        pEntry = e;
+                    }
+                    break;
+                }
                 p = p->Flink;
             }
             if (pEntry) RemoveEntryList(&pEntry->ListEntry);
         } __except (EXCEPTION_EXECUTE_HANDLER) { pEntry = NULL; }
         KeReleaseSpinLock(&g_AuthListLock, oldIrql);
 
+        if (frozen) return STATUS_ACCESS_DENIED;
         if (!pEntry) return STATUS_NOT_FOUND;
 
         __try { if (pEntry->Process) ObDereferenceObject(pEntry->Process); }
@@ -3232,6 +3279,8 @@ NTSTATUS R0SimulateAuthorizedListOperations(PVOID InputBuffer, ULONG InputSize,
         PAUTH_ENTRY pEntry = NULL;
         PLIST_ENTRY p;
         UINT64 newMask;
+        BOOLEAN frozen = FALSE;
+        BOOLEAN callerIsPriv;
 
         if (InputSize < sizeof(R0S_AUTH_LIST_INPUT) + sizeof(UINT64))
             return STATUS_BUFFER_TOO_SMALL;
@@ -3243,18 +3292,28 @@ NTSTATUS R0SimulateAuthorizedListOperations(PVOID InputBuffer, ULONG InputSize,
                           sizeof(UINT64));
         } __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
 
+        callerIsPriv = (g_PrivilegedMode != 0) && R0sIsPrivileged(PsGetCurrentProcess());
+
         KeAcquireSpinLock(&g_AuthListLock, &oldIrql);
         __try {
             p = g_AuthListHead.Flink;
             while (p != &g_AuthListHead) {
                 PAUTH_ENTRY e = CONTAINING_RECORD(p, AUTH_ENTRY, ListEntry);
-                if ((ULONG)(ULONG_PTR)e->Pid == pIn->Pid) { pEntry = e; break; }
+                if ((ULONG)(ULONG_PTR)e->Pid == pIn->Pid) {
+                    if (g_AuthMode != 0 && !callerIsPriv && e->IoctlMask == R0S_MASK_PRIVILEGED) {
+                        frozen = TRUE;
+                    } else {
+                        pEntry = e;
+                    }
+                    break;
+                }
                 p = p->Flink;
             }
             if (pEntry) pEntry->IoctlMask = newMask;
         } __except (EXCEPTION_EXECUTE_HANDLER) { pEntry = NULL; }
         KeReleaseSpinLock(&g_AuthListLock, oldIrql);
 
+        if (frozen) return STATUS_ACCESS_DENIED;
         if (!pEntry) return STATUS_NOT_FOUND;
 
         if (OutputSize >= sizeof(NTSTATUS)) {
@@ -4049,6 +4108,7 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     ULONG inputSize;
     PVOID outputBuffer = NULL;
     ULONG outputSize;
+    BOOLEAN isPriv;
 
     UNREFERENCED_PARAMETER(DeviceObject);
 
@@ -4068,7 +4128,19 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         outputBuffer = Irp->UserBuffer;
     }
 
-    if (g_RateLimitEnable > 0) {
+    
+    if (idx >= R0S_IOCTL_COUNT) {
+        Irp->IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    
+    isPriv = (g_PrivilegedMode != 0) && R0sIsPrivileged(PsGetCurrentProcess());
+
+    
+    if (!isPriv && g_RateLimitEnable > 0) {
         __try {
             KIRQL   oldIrql;
             BOOLEAN reject = FALSE;
@@ -4105,16 +4177,16 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     __try {
         PFN_IOCTL_HANDLER handler;
 
-        if (idx >= R0S_IOCTL_COUNT) { status = STATUS_INVALID_DEVICE_REQUEST; __leave; }
+        if (!isPriv) {
+            if (g_IoctlDisable[idx] == 1) { status = STATUS_ACCESS_DENIED; __leave; }
 
-        if (g_IoctlDisable[idx] == 1) { status = STATUS_ACCESS_DENIED; __leave; }
+            if (g_SecureMode != 0) {
+                status = R0sCheckSecureMode(g_SecureMode);
+                if (!NT_SUCCESS(status)) { __leave; }
+            }
 
-        if (g_SecureMode != 0) {
-            status = R0sCheckSecureMode(g_SecureMode);
-            if (!NT_SUCCESS(status)) { __leave; }
+            if (!R0sIsIoctlAuthorized(idx)) { status = STATUS_ACCESS_DENIED; __leave; }
         }
-
-        if (!R0sIsIoctlAuthorized(idx)) { status = STATUS_ACCESS_DENIED; __leave; }
 
         handler = (PFN_IOCTL_HANDLER)(ULONG_PTR)g_IoctlHandler[idx];
 
