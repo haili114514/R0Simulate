@@ -939,6 +939,9 @@ static BOOLEAN R0sIsIoctlAuthorized(ULONG idx)
     curProc = PsGetCurrentProcess();
     if (!curProc) return FALSE;
 
+    if (g_AuthMode == 2) {
+        return R0sIsPrivileged(curProc);
+    }
     KeAcquireSpinLock(&g_AuthListLock, &oldIrql);
     __try {
         p = g_AuthListHead.Flink;
@@ -2659,7 +2662,7 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
             return STATUS_ACCESS_DENIED;
 
         if (!isPriv && op == R0SIMULATE_VAR_OP_SET &&
-            g_AuthMode != 0 &&
+            (g_SecureMode & 0x1000) &&
             target->Address == (PVOID)(ULONG_PTR)&g_AuthDefaultMask &&
             pIn->Value == R0S_MASK_PRIVILEGED)
             return STATUS_ACCESS_DENIED;
@@ -3218,7 +3221,7 @@ NTSTATUS R0SimulateAuthorizedListOperations(PVOID InputBuffer, ULONG InputSize,
         pEntry->Pid     = (HANDLE)(ULONG_PTR)pIn->Pid;
         pEntry->Process = pTarget;
 
-        if (g_AuthMode != 0 && !callerIsPriv &&
+        if ((g_SecureMode & 0x1000) && !callerIsPriv &&
             g_AuthDefaultMask == R0S_MASK_PRIVILEGED) {
             pEntry->IoctlMask = 0;
         } else {
@@ -3258,7 +3261,8 @@ NTSTATUS R0SimulateAuthorizedListOperations(PVOID InputBuffer, ULONG InputSize,
             while (p != &g_AuthListHead) {
                 PAUTH_ENTRY e = CONTAINING_RECORD(p, AUTH_ENTRY, ListEntry);
                 if ((ULONG)(ULONG_PTR)e->Pid == pIn->Pid) {
-                    if (g_AuthMode != 0 && !callerIsPriv && e->IoctlMask == R0S_MASK_PRIVILEGED) {
+                    if ((g_SecureMode & 0x1000) && !callerIsPriv &&
+                        e->IoctlMask == R0S_MASK_PRIVILEGED) {
                         frozen = TRUE;
                     } else {
                         pEntry = e;
@@ -3313,7 +3317,7 @@ NTSTATUS R0SimulateAuthorizedListOperations(PVOID InputBuffer, ULONG InputSize,
             while (p != &g_AuthListHead) {
                 PAUTH_ENTRY e = CONTAINING_RECORD(p, AUTH_ENTRY, ListEntry);
                 if ((ULONG)(ULONG_PTR)e->Pid == pIn->Pid) {
-                    if (g_AuthMode != 0 && !callerIsPriv &&
+                    if ((g_SecureMode & 0x1000) && !callerIsPriv &&
                         (e->IoctlMask == R0S_MASK_PRIVILEGED ||
                          newMask    == R0S_MASK_PRIVILEGED)) {
                         frozen = TRUE;
@@ -4143,7 +4147,6 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         outputBuffer = Irp->UserBuffer;
     }
 
-    
     if (idx >= R0S_IOCTL_COUNT) {
         Irp->IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST;
         Irp->IoStatus.Information = 0;
@@ -4151,10 +4154,8 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         return STATUS_INVALID_DEVICE_REQUEST;
     }
 
-    
     isPriv = (g_PrivilegedMode != 0) && R0sIsPrivileged(PsGetCurrentProcess());
 
-    
     if (!isPriv && g_RateLimitEnable > 0) {
         __try {
             KIRQL   oldIrql;
