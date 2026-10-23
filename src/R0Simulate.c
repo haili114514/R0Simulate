@@ -408,6 +408,8 @@ typedef struct _R0S_CALL_DRIVER_INPUT {
     ULONG  InputLength;
     ULONG  OutputLength;
     ULONG  RequestorMode;
+    ULONG  Reserved;
+    UINT64 FileObject;
     UCHAR  Data[1];
 } R0S_CALL_DRIVER_INPUT, *PR0S_CALL_DRIVER_INPUT;
 

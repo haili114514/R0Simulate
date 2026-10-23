@@ -350,7 +350,6 @@ R0SIMULATES_API BOOL R0SimulateKernelProcessHiding(UCHAR operation, ULONG pid, P
             return FALSE;
         }
     }
-    
 
     RtlSetLastWin32Error(ERROR_SUCCESS);
     result = TRUE;
@@ -1118,7 +1117,8 @@ R0SIMULATES_API BOOL R0SimulateArbitraryDriverCall(
     PVOID  pOutBuffer,
     ULONG  outSize,
     PULONG pInformation,
-    ULONG  requestorMode)
+    ULONG  requestorMode,
+    UINT64 fileObject)
 {
     BOOL result = FALSE;
     SIZE_T totalInSize;
@@ -1153,6 +1153,9 @@ R0SIMULATES_API BOOL R0SimulateArbitraryDriverCall(
     pIn->RequestorMode = (requestorMode == R0S_REQUESTOR_MODE_USER)
                          ? R0S_REQUESTOR_MODE_USER
                          : R0S_REQUESTOR_MODE_KERNEL;
+
+    pIn->Reserved      = 0;
+    pIn->FileObject    = fileObject;
 
     if (inputLength > 0) {
         memcpy(pIn->Data, pInputData, inputLength);

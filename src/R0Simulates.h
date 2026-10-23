@@ -330,6 +330,8 @@ typedef struct _R0S_CALL_DRIVER_INPUT {
     ULONG  InputLength;
     ULONG  OutputLength;
     ULONG  RequestorMode;
+    ULONG  Reserved;
+    UINT64 FileObject;
     UCHAR  Data[1];
 } R0S_CALL_DRIVER_INPUT, *PR0S_CALL_DRIVER_INPUT;
 
@@ -444,7 +446,8 @@ R0SIMULATES_API BOOL R0SimulateArbitraryDriverCall(
     PVOID  pOutBuffer,
     ULONG  outSize,
     PULONG pInformation,
-    ULONG  requestorMode);
+    ULONG  requestorMode,
+    UINT64 fileObject);
 
 #ifdef __cplusplus
 }
