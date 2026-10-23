@@ -708,8 +708,8 @@ thread_done:
             inData, sizeof(inData),
             outData, sizeof(outData),
             &info,
-            R0S_REQUESTOR_MODE_KERNEL
-        );
+            R0S_REQUESTOR_MODE_KERNEL,
+            0);
         if (!ok)
         {
             print_last_error("R0S IRP CREATE");
@@ -731,8 +731,8 @@ thread_done:
             inData, sizeof(inData),
             outData, sizeof(outData),
             &info,
-            R0S_REQUESTOR_MODE_KERNEL
-        );
+            R0S_REQUESTOR_MODE_KERNEL,
+            0);
         if (!ok)
         {
             DWORD err = GetLastError();
