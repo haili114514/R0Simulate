@@ -1057,39 +1057,58 @@ R0SIMULATES_API BOOL R0SimulateMSR(
     return result;
 }
 
-R0SIMULATES_API BOOL R0SimulateIRQL(
-    ULONG  operation,
-    UCHAR  targetIrql,
-    PUCHAR pOldIrql,
-    PUCHAR pNewIrql)
+R0SIMULATES_API BOOL R0SimulateAPC(
+    HANDLE threadId,
+    UINT64 functionAddress,
+    ULONG  argc,
+    HANDLE completionEvent,
+    PVOID  resultBuffer,
+    ...)
 {
-    BOOL result = FALSE;
-    R0S_IRQL_INPUT  in;
-    R0S_IRQL_OUTPUT out;
-    IO_STATUS_BLOCK ioStatus;
-    NTSTATUS status;
+    BOOL                    result = FALSE;
+    PSYNC_KERNEL_APC_INPUT  pIn;
+    R0SIMULATE_APC_OUTPUT   out;
+    IO_STATUS_BLOCK         ioStatus;
+    NTSTATUS                status;
+    va_list                 args;
 
     if (!R0Sim_OpenDriver()) return FALSE;
-    if (operation != R0SIRQL_OP_QUERY &&
-        operation != R0SIRQL_OP_RAISE &&
-        operation != R0SIRQL_OP_LOWER) {
+
+    if (!threadId || !functionAddress || argc > 16) {
         RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
 
-    memset(&in, 0, sizeof(in));
-    in.Operation  = operation;
-    in.TargetIrql = targetIrql;
+    pIn = (PSYNC_KERNEL_APC_INPUT)RtlAllocateHeap(
+              R0_HEAP, HEAP_ZERO_MEMORY, sizeof(SYNC_KERNEL_APC_INPUT));
+    if (!pIn) {
+        RtlSetLastWin32Error(ERROR_OUTOFMEMORY);
+        return FALSE;
+    }
+
+    pIn->ThreadId        = threadId;
+    pIn->FunctionAddress = functionAddress;
+    pIn->ArgumentCount   = argc;
+    pIn->CompletionEvent = completionEvent;
+    pIn->ResultBuffer    = resultBuffer;
+
+    va_start(args, resultBuffer);
+    {
+        ULONG i;
+        for (i = 0; i < argc && i < 16; i++)
+            pIn->Arguments[i] = va_arg(args, UINT64);
+    }
+    va_end(args);
 
     memset(&out, 0, sizeof(out));
-    memset(&ioStatus, 0, sizeof(ioStatus));
 
     status = NtDeviceIoControlFile(
         g_hDriver, NULL, NULL, NULL, &ioStatus,
-        IOCTL_R0SIMULATE_IRQL,
-        &in, sizeof(in),
+        IOCTL_R0SIMULATE_APC,
+        pIn, sizeof(SYNC_KERNEL_APC_INPUT),
         &out, sizeof(out)
     );
+    RtlFreeHeap(R0_HEAP, 0, pIn);
 
     if (!NT_SUCCESS(status)) {
         RtlSetLastWin32Error((DWORD)status);
@@ -1100,8 +1119,6 @@ R0SIMULATES_API BOOL R0SimulateIRQL(
         return FALSE;
     }
 
-    if (pOldIrql) *pOldIrql = out.OldIrql;
-    if (pNewIrql) *pNewIrql = out.NewIrql;
     RtlSetLastWin32Error(ERROR_SUCCESS);
     result = TRUE;
     return result;

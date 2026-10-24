@@ -5,7 +5,14 @@
 #include <ntimage.h>
 #include <intrin.h>
 
+#ifndef PKNORMAL_ROUTINE
+typedef VOID (NTAPI *PKNORMAL_ROUTINE)(PVOID NormalContext,
+                                       PVOID SystemArgument1,
+                                       PVOID SystemArgument2);
+#endif
+
 #pragma warning(disable:4100 4189 4211 4819)
+#pragma warning(disable:4013)
 
 #define DEVICE_NAME     L"\\Device\\R0Simulate"
 #define SYM_LINK_NAME   L"\\DosDevices\\R0Simulate"
@@ -29,7 +36,7 @@
 #define IOCTL_R0SIMULATE_CREATE_SYSTEM_THREAD       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80B, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_DIRECT_CREATE_DRIVER       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80C, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_MSR                        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80D, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_IRQL                       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80E, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_APC                        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80E, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_ARBITRARY_DRIVER_CALL      CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80F, METHOD_NEITHER, FILE_ANY_ACCESS)
 
 #define IOCTL_INDEX_EXEC_INSTRUCTION       0x00
@@ -46,7 +53,7 @@
 #define IOCTL_INDEX_CREATE_SYSTEM_THREAD   0x0B
 #define IOCTL_INDEX_DIRECT_CREATE_DRIVER   0x0C
 #define IOCTL_INDEX_MSR                    0x0D
-#define IOCTL_INDEX_IRQL                   0x0E
+#define IOCTL_INDEX_APC                    0x0E
 #define IOCTL_INDEX_ARBITRARY_DRIVER_CALL  0x0F
 
 #define R0S_IOCTL_FUNCTION_OF(code)  (((code) & 0x3FFCUL) >> 2)
@@ -102,10 +109,6 @@
 #define R0SMSR_OP_READ      0x01
 #define R0SMSR_OP_WRITE     0x02
 
-#define R0SIRQL_OP_QUERY    0x01
-#define R0SIRQL_OP_RAISE    0x02
-#define R0SIRQL_OP_LOWER    0x03
-
 #define R0SKOH_TYPE_HANDLE   0
 #define R0SKOH_TYPE_POINTER  1
 
@@ -119,6 +122,14 @@
 #define R0S_DEBUG_TEST(idx) \
     (((idx) < R0S_IOCTL_COUNT) && \
      (((g_DebugMode >> (idx)) & 1ULL) != 0ULL))
+
+#ifndef OriginalApcEnvironment
+typedef enum _KAPC_ENVIRONMENT {
+    OriginalApcEnvironment,
+    ApcEnvironment,
+    ThreadApcEnvironment
+} KAPC_ENVIRONMENT;
+#endif
 
 typedef struct _EXEC_INSTRUCTION_INPUT {
     ULONG   InstructionSize;
@@ -389,18 +400,29 @@ typedef struct _R0S_MSR_OUTPUT {
     NTSTATUS Status;
 } R0S_MSR_OUTPUT, *PR0S_MSR_OUTPUT;
 
-typedef struct _R0S_IRQL_INPUT {
-    ULONG Operation;
-    UCHAR TargetIrql;
-    UCHAR Reserved[3];
-} R0S_IRQL_INPUT, *PR0S_IRQL_INPUT;
+typedef struct _SYNC_KERNEL_APC_INPUT {
+    HANDLE   ThreadId;
+    UINT64   FunctionAddress;
+    ULONG    ArgumentCount;
+    ULONG    Reserved;
+    UINT64   Arguments[16];
+    HANDLE   CompletionEvent;
+    PVOID    ResultBuffer;
+} SYNC_KERNEL_APC_INPUT, *PSYNC_KERNEL_APC_INPUT;
 
-typedef struct _R0S_IRQL_OUTPUT {
-    UCHAR    OldIrql;
-    UCHAR    NewIrql;
-    UCHAR    Reserved[2];
+typedef struct _R0SIMULATE_APC_OUTPUT {
     NTSTATUS Status;
-} R0S_IRQL_OUTPUT, *PR0S_IRQL_OUTPUT;
+    ULONG    Reserved;
+} R0SIMULATE_APC_OUTPUT, *PR0SIMULATE_APC_OUTPUT;
+
+typedef struct _SYNC_KERNEL_APC_CONTEXT {
+    PVOID    FunctionAddress;
+    ULONG    ArgumentCount;
+    UINT64   Arguments[16];
+    PETHREAD TargetThread;
+    PVOID    ResultBuffer;
+    PKEVENT  CompletionEvent;
+} SYNC_KERNEL_APC_CONTEXT, *PSYNC_KERNEL_APC_CONTEXT;
 
 typedef struct _R0S_CALL_DRIVER_INPUT {
     UINT64 DriverObject;
@@ -483,8 +505,8 @@ static ULONG        g_AuthMode = 0;
 static UINT64  g_AuthDefaultMask = 0;
 static LIST_ENTRY   g_AuthListHead;
 static KSPIN_LOCK   g_AuthListLock;
-static ULONG g_VersionMajor    = 2;
-static ULONG g_VersionMinor    = 9;
+static ULONG g_VersionMajor    = 3;
+static ULONG g_VersionMinor    = 0;
 static ULONG g_VersionBuild    = 0;
 static ULONG g_VersionRevision = 0;
 static LIST_ENTRY   g_Win32kSsdtListHead;
@@ -565,8 +587,12 @@ NTSTATUS R0SimulateAuthorizedListOperations(PVOID, ULONG, PVOID, ULONG, ULONG_PT
 NTSTATUS R0SimulateCreateSystemThread(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateDirectCreateDriver(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateMSR(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
-NTSTATUS R0SimulateIRQL(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
+NTSTATUS R0SimulateAPC(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateArbitraryDriverCall(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
+
+static VOID R0sApcKernelRoutine(PRKAPC, PKNORMAL_ROUTINE*, PVOID*, PVOID*, PVOID*);
+static VOID R0sApcRundownRoutine(PRKAPC);
+static VOID R0sApcNormalRoutine(PVOID, PVOID, PVOID);
 
 static BOOLEAN  R0sIsIoctlAuthorized(ULONG idx);
 static VOID     R0sFreeAuthList(VOID);
@@ -3605,57 +3631,157 @@ NTSTATUS R0SimulateMSR(PVOID InputBuffer, ULONG InputSize,
     return STATUS_INVALID_PARAMETER;
 }
 
-NTSTATUS R0SimulateIRQL(PVOID InputBuffer, ULONG InputSize,
-                        PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
+static VOID R0sApcKernelRoutine(PRKAPC Apc, PKNORMAL_ROUTINE* NormalRoutine,
+                                PVOID* NormalContext, PVOID* SystemArgument1,
+                                PVOID* SystemArgument2)
 {
-    R0S_IRQL_INPUT in;
-    PR0S_IRQL_OUTPUT pOut;
-    UCHAR oldIrql;
+    UNREFERENCED_PARAMETER(NormalRoutine);
+    UNREFERENCED_PARAMETER(NormalContext);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+    if (Apc) ExFreePoolWithTag(Apc, 'R0AA');
+}
 
-    if (!InputBuffer || InputSize < sizeof(R0S_IRQL_INPUT))
+static VOID R0sApcRundownRoutine(PRKAPC Apc)
+{
+    PSYNC_KERNEL_APC_CONTEXT ctx;
+    if (!Apc) return;
+
+    ctx = (PSYNC_KERNEL_APC_CONTEXT)Apc->NormalContext;
+    if (ctx) {
+        if (ctx->TargetThread)    ObDereferenceObject(ctx->TargetThread);
+        if (ctx->CompletionEvent) ObDereferenceObject(ctx->CompletionEvent);
+        ExFreePoolWithTag(ctx, 'R0AC');
+    }
+    ExFreePoolWithTag(Apc, 'R0AA');
+}
+
+static VOID R0sApcNormalRoutine(PVOID NormalContext, PVOID SystemArgument1,
+                                PVOID SystemArgument2)
+{
+    PSYNC_KERNEL_APC_CONTEXT ctx = (PSYNC_KERNEL_APC_CONTEXT)NormalContext;
+    UINT64   result = 0;
+    NTSTATUS status;
+
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    if (!ctx) return;
+
+    status = R0SimulateAPI(ctx->FunctionAddress, ctx->ArgumentCount,
+                           ctx->Arguments, &result);
+    if (!NT_SUCCESS(status))
+        result = (UINT64)status;
+
+    if (ctx->ResultBuffer) {
+        
+        __try { *(UINT64*)ctx->ResultBuffer = result; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { }
+    }
+
+    if (ctx->CompletionEvent)
+        KeSetEvent(ctx->CompletionEvent, IO_NO_INCREMENT, FALSE);
+
+    if (ctx->TargetThread)    ObDereferenceObject(ctx->TargetThread);
+    if (ctx->CompletionEvent) ObDereferenceObject(ctx->CompletionEvent);
+    ExFreePoolWithTag(ctx, 'R0AC');
+}
+
+NTSTATUS R0SimulateAPC(PVOID InputBuffer, ULONG InputSize,
+                       PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
+{
+    PSYNC_KERNEL_APC_INPUT   pIn     = NULL;
+    PSYNC_KERNEL_APC_CONTEXT pCtx    = NULL;
+    PRKAPC                   pApc    = NULL;
+    PETHREAD                 pThread = NULL;
+    PKEVENT                  pEvent  = NULL;
+    PVOID                    funcAddr;
+    NTSTATUS                 status  = STATUS_SUCCESS;
+    KPROCESSOR_MODE          prevMode;
+
+    if (!InputBuffer || InputSize < sizeof(SYNC_KERNEL_APC_INPUT))
         return STATUS_INVALID_PARAMETER;
-    if (!OutputBuffer || OutputSize < sizeof(R0S_IRQL_OUTPUT))
-        return STATUS_BUFFER_TOO_SMALL;
 
-    __try { RtlCopyMemory(&in, InputBuffer, sizeof(in)); }
+    __try { pIn = (PSYNC_KERNEL_APC_INPUT)InputBuffer; }
     __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
 
-    pOut = (PR0S_IRQL_OUTPUT)OutputBuffer;
-    RtlZeroMemory(pOut, sizeof(*pOut));
+    if (!pIn->ThreadId || !pIn->FunctionAddress || pIn->ArgumentCount > 16)
+        return STATUS_INVALID_PARAMETER;
 
-    if (in.Operation == R0SIRQL_OP_QUERY) {
-        pOut->OldIrql = KeGetCurrentIrql();
-        pOut->NewIrql = pOut->OldIrql;
-        pOut->Status  = STATUS_SUCCESS;
-        if (Info) *Info = sizeof(*pOut);
-        return STATUS_SUCCESS;
+    funcAddr = (PVOID)(ULONG_PTR)pIn->FunctionAddress;
+
+    status = PsLookupThreadByThreadId((HANDLE)(ULONG_PTR)pIn->ThreadId, &pThread);
+    if (!NT_SUCCESS(status)) return status;
+
+    if (pIn->CompletionEvent) {
+        prevMode = ExGetPreviousMode();
+        status = ObReferenceObjectByHandle(pIn->CompletionEvent,
+                                           EVENT_MODIFY_STATE,
+                                           *ExEventObjectType,
+                                           prevMode,
+                                           (PVOID*)&pEvent,
+                                           NULL);
+        if (!NT_SUCCESS(status)) {
+            ObDereferenceObject(pThread);
+            return status;
+        }
     }
 
-    if (in.Operation == R0SIRQL_OP_RAISE) {
-        if (in.TargetIrql > DISPATCH_LEVEL) return STATUS_INVALID_PARAMETER;
+    pApc = (PRKAPC)ExAllocatePoolWithTag(NonPagedPool, sizeof(KAPC), 'R0AA');
+    pCtx = (PSYNC_KERNEL_APC_CONTEXT)ExAllocatePoolWithTag(
+                NonPagedPool, sizeof(SYNC_KERNEL_APC_CONTEXT), 'R0AC');
+    if (!pApc || !pCtx) {
+        if (pApc) ExFreePoolWithTag(pApc, 'R0AA');
+        if (pCtx) ExFreePoolWithTag(pCtx, 'R0AC');
+        ObDereferenceObject(pThread);
+        if (pEvent) ObDereferenceObject(pEvent);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlZeroMemory(pCtx, sizeof(SYNC_KERNEL_APC_CONTEXT));
+    pCtx->FunctionAddress = funcAddr;
+    pCtx->ArgumentCount   = pIn->ArgumentCount;
+    pCtx->TargetThread    = pThread;
+    pCtx->ResultBuffer    = pIn->ResultBuffer;
+    pCtx->CompletionEvent = pEvent;
+
+    __try {
+        RtlCopyMemory(pCtx->Arguments, pIn->Arguments,
+                      pIn->ArgumentCount * sizeof(UINT64));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ExFreePoolWithTag(pApc, 'R0AA');
+        ExFreePoolWithTag(pCtx, 'R0AC');
+        ObDereferenceObject(pThread);
+        if (pEvent) ObDereferenceObject(pEvent);
+        return GetExceptionCode();
+    }
+
+    KeInitializeApc(pApc,
+                    (PKTHREAD)pThread,
+                    OriginalApcEnvironment,
+                    R0sApcKernelRoutine,
+                    R0sApcRundownRoutine,
+                    R0sApcNormalRoutine,
+                    KernelMode,
+                    (PVOID)pCtx);
+
+    if (!KeInsertQueueApc(pApc, NULL, NULL, 0)) {
+        ExFreePoolWithTag(pApc, 'R0AA');
+        ExFreePoolWithTag(pCtx, 'R0AC');
+        ObDereferenceObject(pThread);
+        if (pEvent) ObDereferenceObject(pEvent);
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    if (OutputBuffer && OutputSize >= sizeof(R0SIMULATE_APC_OUTPUT)) {
+        PR0SIMULATE_APC_OUTPUT pOut = (PR0SIMULATE_APC_OUTPUT)OutputBuffer;
         __try {
-            oldIrql = KeGetCurrentIrql();
-            KeRaiseIrql(in.TargetIrql, &oldIrql);
-            pOut->OldIrql = oldIrql;
-            pOut->NewIrql = KeGetCurrentIrql();
-            pOut->Status  = STATUS_SUCCESS;
-        } __except (EXCEPTION_EXECUTE_HANDLER) { pOut->Status = GetExceptionCode(); }
-        if (Info) *Info = sizeof(*pOut);
-        return pOut->Status;
+            pOut->Status   = STATUS_SUCCESS;
+            pOut->Reserved = 0;
+        } __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
     }
-
-    if (in.Operation == R0SIRQL_OP_LOWER) {
-        __try {
-            pOut->OldIrql = KeGetCurrentIrql();
-            KeLowerIrql(in.TargetIrql);
-            pOut->NewIrql = KeGetCurrentIrql();
-            pOut->Status  = STATUS_SUCCESS;
-        } __except (EXCEPTION_EXECUTE_HANDLER) { pOut->Status = GetExceptionCode(); }
-        if (Info) *Info = sizeof(*pOut);
-        return pOut->Status;
-    }
-
-    return STATUS_INVALID_PARAMETER;
+    if (Info) *Info = sizeof(R0SIMULATE_APC_OUTPUT);
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS R0SimulateArbitraryDriverCall(PVOID InputBuffer, ULONG InputSize,
@@ -3796,7 +3922,7 @@ static const char* R0S_FuncName(ULONG idx)
         case IOCTL_INDEX_CREATE_SYSTEM_THREAD:  return "R0SimulateCreateSystemThread";
         case IOCTL_INDEX_DIRECT_CREATE_DRIVER:  return "R0SimulateDirectCreateDriver";
         case IOCTL_INDEX_MSR:                   return "R0SimulateMSR";
-        case IOCTL_INDEX_IRQL:                  return "R0SimulateIRQL";
+        case IOCTL_INDEX_APC:                   return "R0SimulateAPC";
         case IOCTL_INDEX_ARBITRARY_DRIVER_CALL: return "R0SimulateArbitraryDriverCall";
         default: return "Unknown";
     }
@@ -3959,12 +4085,14 @@ static VOID R0S_LogIn(ULONG code, ULONG idx, PVOID inputBuffer, ULONG inputSize)
                          tid, pid, fn, p->Operation, p->Msr, p->Value);
                 break;
             }
-            case IOCTL_INDEX_IRQL: {
-                if (!inputBuffer || inputSize < sizeof(R0S_IRQL_INPUT))
+            case IOCTL_INDEX_APC: {
+                if (!inputBuffer || inputSize < sizeof(SYNC_KERNEL_APC_INPUT))
                     { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
-                PR0S_IRQL_INPUT p = (PR0S_IRQL_INPUT)inputBuffer;
-                DbgPrint("R0S IN  tid=%p pid=%p func=%s op=0x%X targetIrql=%u\n",
-                         tid, pid, fn, p->Operation, p->TargetIrql);
+                PSYNC_KERNEL_APC_INPUT p = (PSYNC_KERNEL_APC_INPUT)inputBuffer;
+                DbgPrint("R0S IN  tid=%p pid=%p func=%s targetTid=%p addr=0x%I64X argc=%u event=%p result=%p\n",
+                         tid, pid, fn,
+                         p->ThreadId, p->FunctionAddress, p->ArgumentCount,
+                         p->CompletionEvent, p->ResultBuffer);
                 break;
             }
             case IOCTL_INDEX_ARBITRARY_DRIVER_CALL: {
@@ -4101,14 +4229,12 @@ static VOID R0S_LogOut(ULONG code, ULONG idx, NTSTATUS status, ULONG_PTR info,
                          tid, pid, fn, (ULONG)st, val, (ULONG)info);
                 break;
             }
-            case IOCTL_INDEX_IRQL: {
-                UCHAR oldI = 0, newI = 0; NTSTATUS st = status;
-                if (outputBuffer && outputSize >= sizeof(R0S_IRQL_OUTPUT)) {
-                    PR0S_IRQL_OUTPUT p = (PR0S_IRQL_OUTPUT)outputBuffer;
-                    oldI = p->OldIrql; newI = p->NewIrql; st = (NTSTATUS)p->Status;
-                }
-                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X oldIrql=%u newIrql=%u info=%u\n",
-                         tid, pid, fn, (ULONG)st, oldI, newI, (ULONG)info);
+            case IOCTL_INDEX_APC: {
+                NTSTATUS st = status;
+                if (outputBuffer && outputSize >= sizeof(R0SIMULATE_APC_OUTPUT))
+                    st = (NTSTATUS)((PR0SIMULATE_APC_OUTPUT)outputBuffer)->Status;
+                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X info=%u\n",
+                         tid, pid, fn, (ULONG)st, (ULONG)info);
                 break;
             }
             case IOCTL_INDEX_ARBITRARY_DRIVER_CALL: {
@@ -4283,7 +4409,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         g_IoctlHandler[IOCTL_INDEX_CREATE_SYSTEM_THREAD]  = (UINT64)(ULONG_PTR)&R0SimulateCreateSystemThread;
         g_IoctlHandler[IOCTL_INDEX_DIRECT_CREATE_DRIVER]  = (UINT64)(ULONG_PTR)&R0SimulateDirectCreateDriver;
         g_IoctlHandler[IOCTL_INDEX_MSR]                   = (UINT64)(ULONG_PTR)&R0SimulateMSR;
-        g_IoctlHandler[IOCTL_INDEX_IRQL]                  = (UINT64)(ULONG_PTR)&R0SimulateIRQL;
+        g_IoctlHandler[IOCTL_INDEX_APC]                   = (UINT64)(ULONG_PTR)&R0SimulateAPC;
         g_IoctlHandler[IOCTL_INDEX_ARBITRARY_DRIVER_CALL] = (UINT64)(ULONG_PTR)&R0SimulateArbitraryDriverCall;
 
         RtlInitUnicodeString(&devName, DEVICE_NAME);

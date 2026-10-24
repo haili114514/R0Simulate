@@ -27,7 +27,7 @@ extern "C" {
 #define IOCTL_R0SIMULATE_CREATE_SYSTEM_THREAD       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80B, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_DIRECT_CREATE_DRIVER       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80C, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_MSR                        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80D, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_IRQL                       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80E, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_APC                        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80E, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_ARBITRARY_DRIVER_CALL      CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80F, METHOD_NEITHER, FILE_ANY_ACCESS)
 
 #define R0S_IOCTL_LAST    0x0F
@@ -88,11 +88,6 @@ extern "C" {
 // ----- MSR -----
 #define R0SMSR_OP_READ      0x01
 #define R0SMSR_OP_WRITE     0x02
-
-// ----- IRQL -----
-#define R0SIRQL_OP_QUERY    0x01
-#define R0SIRQL_OP_RAISE    0x02
-#define R0SIRQL_OP_LOWER    0x03
 
 #define R0S_REQUESTOR_MODE_KERNEL   0x00
 #define R0S_REQUESTOR_MODE_USER     0x01
@@ -309,18 +304,21 @@ typedef struct _R0S_MSR_OUTPUT {
     NTSTATUS Status;
 } R0S_MSR_OUTPUT, *PR0S_MSR_OUTPUT;
 
-typedef struct _R0S_IRQL_INPUT {
-    ULONG Operation;
-    UCHAR TargetIrql;
-    UCHAR Reserved[3];
-} R0S_IRQL_INPUT, *PR0S_IRQL_INPUT;
+// ----- APC (replaces IRQL) -----
+typedef struct _SYNC_KERNEL_APC_INPUT {
+    HANDLE   ThreadId;
+    UINT64   FunctionAddress;
+    ULONG    ArgumentCount;
+    ULONG    Reserved;
+    UINT64   Arguments[16];
+    HANDLE   CompletionEvent;
+    PVOID    ResultBuffer;
+} SYNC_KERNEL_APC_INPUT, *PSYNC_KERNEL_APC_INPUT;
 
-typedef struct _R0S_IRQL_OUTPUT {
-    UCHAR    OldIrql;
-    UCHAR    NewIrql;
-    UCHAR    Reserved[2];
+typedef struct _R0SIMULATE_APC_OUTPUT {
     NTSTATUS Status;
-} R0S_IRQL_OUTPUT, *PR0S_IRQL_OUTPUT;
+    ULONG    Reserved;
+} R0SIMULATE_APC_OUTPUT, *PR0SIMULATE_APC_OUTPUT;
 
 typedef struct _R0S_CALL_DRIVER_INPUT {
     UINT64 DriverObject;
@@ -430,11 +428,13 @@ R0SIMULATES_API BOOL R0SimulateMSR(
     UINT64  value,
     PUINT64 pOutValue);
 
-R0SIMULATES_API BOOL R0SimulateIRQL(
-    ULONG  operation,
-    UCHAR  targetIrql,
-    PUCHAR pOldIrql,
-    PUCHAR pNewIrql);
+R0SIMULATES_API BOOL R0SimulateAPC(
+    HANDLE  threadId,
+    UINT64  functionAddress,
+    ULONG   argc,
+    HANDLE  completionEvent,
+    PVOID   resultBuffer,
+    ...);
 
 R0SIMULATES_API BOOL R0SimulateArbitraryDriverCall(
     UINT64 driverObject,
