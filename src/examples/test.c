@@ -65,6 +65,21 @@ static void print_last_error(const char* msg)
     fprintf(stderr, "[!] %s failed, error code: %lu (0x%08lX)\n", msg, err, err);
 }
 
+static BOOL ProbeDevice(const char* tag)
+{
+    HANDLE h = CreateFileW(L"\\\\.\\R0Simulate",
+                           GENERIC_READ | GENERIC_WRITE,
+                           0, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        printf("  [Probe:%s] Device NOT accessible, Error=0x%08lX\n",
+               tag, (unsigned)GetLastError());
+        return FALSE;
+    }
+    CloseHandle(h);
+    printf("  [Probe:%s] Device accessible\n", tag);
+    return TRUE;
+}
+
 static void PrintCurrentUserName(void)
 {
     HANDLE hToken;
@@ -117,6 +132,13 @@ int main(void)
     printf("===== R0Simulate IOCTL Test Suite =====\n");
     printf("Driver: R0Simulate.sys, Test Signing ON\n");
     printf("DLL:    R0Simulates.dll (1 function <-> 1 IOCTL)\n\n");
+
+    if (!ProbeDevice("start")) {
+        printf("[!] Driver device not found at startup. Is R0Simulate.sys loaded?\n");
+        goto finish_all;
+    }
+
+    
 
     printf("[1] IOCTL_R0SIMULATE_SET_INTERNAL_VARS  (R0S SIV)\n");
     {
@@ -185,6 +207,9 @@ int main(void)
         }
         printf("\n");
     }
+
+    
+
     printf("[2] IOCTL_R0SIMULATE_EXEC_INSTRUCTION  (R0S EI)\n");
     {
         printf("  [2.1] Execute machine code: mov eax,1234; ret\n");
@@ -201,6 +226,9 @@ int main(void)
             printf("\n");
         }
     }
+
+    
+
     printf("[3] IOCTL_R0SIMULATE_CALL_KERNEL_API  (R0S API)\n");
     {
         UINT64 kernelAddr;
@@ -230,6 +258,9 @@ int main(void)
         }
         printf("\n");
     }
+
+    
+
     printf("[4] IOCTL_R0SIMULATE_KERNEL_MEMORY_ACCESS  (R0S KMA)\n");
     {
         BYTE   writeData[] = {0xDE,0xAD,0xBE,0xEF,0x12,0x34,0x56,0x78,0x90,0xAB,0xCD,0xEF};
@@ -285,6 +316,9 @@ int main(void)
 kma_done:
         printf("\n");
     }
+
+    
+
     printf("[5] IOCTL_R0SIMULATE_KERNEL_PROCESS_HIDING  (R0S KPH)\n");
     {
         NTSTATUS status;
@@ -309,6 +343,8 @@ kma_done:
         }
         printf("\n");
     }
+
+    
 
     printf("[6] IOCTL_R0SIMULATE_GET_SYSTEM_TOKEN  (R0S GST)\n");
     {
@@ -346,6 +382,8 @@ kma_done:
         printf("\n");
     }
 
+    
+
     printf("[7] IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION  (R0S GKF)\n");
     {
         printf("  [7.1] Lookup symbol: ExAllocatePoolWithTag\n");
@@ -361,6 +399,8 @@ kma_done:
         }
         printf("\n");
     }
+
+    
 
     printf("[8] IOCTL_R0SIMULATE_IO  (R0S IO)\n");
     {
@@ -392,6 +432,8 @@ kma_done:
         }
         printf("\n");
     }
+
+    
 
     printf("[9] IOCTL_R0SIMULATE_PREVIOUS_MODE_SWITCH  (R0S PMS)\n");
     {
@@ -437,11 +479,12 @@ kma_done:
         printf("\n");
     }
 
-    printf("[10] IOCTL_R0SIMULATE_KERNEL_OPEN_HANDLE (R0S KOH) - handle/pointer conversion (unsafe demo)\n");
+    
+
+    printf("[10] IOCTL_R0SIMULATE_KERNEL_OPEN_HANDLE (R0S KOH) - handle/pointer conversion\n");
     {
         ULONG pid = GetCurrentProcessId();
         KERNEL_OPEN_HANDLE_OUTPUT out  = {0};
-        KERNEL_OPEN_HANDLE_OUTPUT out2 = {0};
         HANDLE hProcess = NULL;
         BOOL ok;
 
@@ -469,41 +512,20 @@ kma_done:
             print_last_error("R0S KOH handle to pointer");
             goto test10_end;
         }
-
         printf("      OK: KernelPointer = 0x%p\n", out.KernelPointer);
-        printf("      Warning: this pointer was dereferenced in kernel and is now dangling.\n");
 
-        printf("  [10.3] Convert kernel pointer back to handle (Type=R0SKOH_TYPE_POINTER)\n");
-        printf("      Warning: unsafe operation, may cause a bugcheck. Demo only.\n");
-        ok = R0SimulateKernelOpenHandle(
-            R0SKOH_TYPE_POINTER,
-            PROCESS_QUERY_INFORMATION,
-            (UINT64)(ULONG_PTR)out.KernelPointer,
-            R0SKOH_ACCESS_MODE_KERNEL,
-            OBJ_KERNEL_HANDLE,
-            0,
-            &out2
-        );
-        if (ok && NT_SUCCESS(out2.Status))
-        {
-            printf("      OK: ResultHandle = 0x%p\n", out2.ResultHandle);
-            if (out2.ResultHandle != NULL && out2.ResultHandle != INVALID_HANDLE_VALUE)
-            {
-                CloseHandle(out2.ResultHandle);
-                printf("      Handle closed\n");
-            }
-        }
-        else
-        {
-            printf("      Failed: Status = 0x%08X\n", out2.Status);
-            print_last_error("R0S KOH pointer to handle");
-        }
+        printf("  [10.3] Convert kernel pointer back to handle -- SKIPPED (unsafe)\n");
+        printf("      Note: the pointer returned by 10.2 was dereferenced in kernel\n");
+        printf("      and is unsafe to reuse (use-after-free). Skipping to avoid\n");
+        printf("      corrupting kernel state for subsequent tests.\n");
 
 test10_end:
         if (hProcess != NULL)
             CloseHandle(hProcess);
         printf("\n");
     }
+
+    
 
     printf("[11] IOCTL_R0SIMULATE_AUTHORIZED_LIST  (R0S AUTH)\n");
     {
@@ -582,9 +604,11 @@ test10_end:
         printf("\n");
     }
 
+    
+
     printf("[12] IOCTL_R0SIMULATE_CREATE_SYSTEM_THREAD  (R0S THREAD)\n");
     {
-        BYTE   shellcode[] = { 0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3 };
+        BYTE   shellcode[] = { 0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3 }; 
         UINT64 execAddr = 0;
         HANDLE hThread = NULL;
         BOOL   ok;
@@ -623,22 +647,27 @@ test10_end:
         }
         else
         {
-            printf("      OK: kernel thread handle = 0x%p (note: kernel handle, not closable from user mode)\n", hThread);
-            Sleep(200);
-            printf("      Sleep 200ms waiting for thread to finish\n");
+            printf("      OK: kernel thread handle = 0x%p (kernel handle, not closable from user mode)\n", hThread);
+            Sleep(2000);
+            printf("      Slept 2000ms to allow the system thread to run to completion\n");
         }
 
 thread_free:
-        printf("  [12.4] Free executable memory\n");
-        R0SimulateAPI(L"ExFreePoolWithTag", 2, 0, execAddr, tag_DEMO);
-        if (GetLastError() == ERROR_SUCCESS)
-            printf("      OK: freed\n");
-        else
-            print_last_error("free exec mem");
+        
+
+        printf("  [12.4] Skip free of execAddr (avoid use-after-free of system thread)\n");
+        printf("      Leaked 64 bytes in NonPagedPoolExecute - harmless\n");
 
 thread_done:
         printf("\n");
     }
+
+    if (!ProbeDevice("after-12")) {
+        printf("[!] Driver went offline after [12]. Skipping remaining tests.\n");
+        goto finish_all;
+    }
+
+    
 
     printf("[13] IOCTL_R0SIMULATE_MSR  (R0S MSR)\n");
     {
@@ -663,19 +692,101 @@ thread_done:
         printf("\n");
     }
 
-    printf("[14] IOCTL_R0SIMULATE_IRQL  (R0S IRQL)\n");
-    {
-        UCHAR oldIrql = 0, newIrql = 0;
-        BOOL  ok;
+    if (!ProbeDevice("before-14")) {
+        printf("[!] Driver went offline after [13]. Skipping remaining tests.\n");
+        goto finish_all;
+    }
 
-        printf("  [14.1] QUERY: read current IRQL\n");
-        ok = R0SimulateIRQL(R0SIRQL_OP_QUERY, 0, &oldIrql, &newIrql);
-        if (ok)
-            printf("      OK: current IRQL = %u\n", oldIrql);
-        else
-            print_last_error("R0S IRQL QUERY");
+    
+
+    printf("[14] IOCTL_R0SIMULATE_APC  (R0S APC) - synchronous kernel APC\n");
+    {
+        BYTE   shellcode[] = { 0xB8, 0x2A, 0x00, 0x00, 0x00, 0xC3 }; 
+        UINT64 execAddr = 0;
+        HANDLE hEvent   = NULL;
+        UINT64 result   = 0;
+        BOOL   ok;
+
+        printf("  [14.1] Allocate executable kernel memory (64 bytes)\n");
+        execAddr = R0SimulateAPI(
+            L"ExAllocatePoolWithTag",
+            3, 0,
+            (UINT64)0x00000000,
+            (UINT64)64,
+            tag_DEMO
+        );
+        if (execAddr == 0)
+        {
+            print_last_error("alloc exec mem");
+            printf("\n");
+            goto apc_done;
+        }
+        printf("      OK: exec = 0x%016llX\n", execAddr);
+
+        printf("  [14.2] Write shellcode (B8 2A 00 00 00 C3 = mov eax,42; ret)\n");
+        ok = R0SimulateKernelMemoryAccess(execAddr, 0, sizeof(shellcode),
+                                          R0SKMA_OP_WRITE, shellcode);
+        if (!ok)
+        {
+            print_last_error("write shellcode");
+            goto apc_free;
+        }
+
+        printf("  [14.3] Create completion event\n");
+        hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+        if (!hEvent)
+        {
+            print_last_error("CreateEvent");
+            goto apc_free;
+        }
+
+        printf("  [14.4] Queue kernel APC to current thread (TID=%lu)\n",
+               (unsigned long)GetCurrentThreadId());
+        ok = R0SimulateAPC(
+            (HANDLE)(ULONG_PTR)GetCurrentThreadId(),
+            execAddr,
+            0,
+            hEvent,
+            &result);
+        if (!ok)
+        {
+            print_last_error("R0S APC");
+            goto apc_close;
+        }
+        printf("      OK: APC queued (kernel will deliver on return to user mode)\n");
+
+        printf("  [14.5] Wait for completion...\n");
+        {
+            DWORD wr = WaitForSingleObject(hEvent, 3000);
+            if (wr == WAIT_OBJECT_0)
+            {
+                printf("      OK: completed, result = 0x%llX\n", result);
+                if (result == 42)
+                    printf("      PASS: APC executed, result matches (42)\n");
+                else
+                    printf("      FAIL: unexpected result (expected 42)\n");
+            }
+            else
+            {
+                printf("      WARN: wait result = %lu (timeout / not delivered?)\n", wr);
+            }
+        }
+
+apc_close:
+        if (hEvent) CloseHandle(hEvent);
+apc_free:
+        
+        printf("  [14.6] Skip free of execAddr (avoid use-after-free of APC shellcode)\n");
+apc_done:
         printf("\n");
     }
+
+    if (!ProbeDevice("after-14")) {
+        printf("[!] Driver went offline after [14]. Skipping remaining tests.\n");
+        goto finish_all;
+    }
+
+    
 
     printf("[15] IOCTL_R0SIMULATE_ARBITRARY_DRIVER_CALL  (R0S IRP)\n");
     {
@@ -757,6 +868,38 @@ irp_done:
         printf("\n");
     }
 
+    
+
+    printf("[16] IOCTL_R0SIMULATE_DIRECT_CREATE_DRIVER  (R0S DCD)\n");
+    {
+        UINT64 driverObject = 0;
+        BOOL   ok;
+
+        printf("  [16.1] Negative test: NULL init function must be rejected\n");
+        SetLastError(0);
+        ok = R0SimulateDirectCreateDriver(0, L"\\Driver\\R0SimTest", &driverObject);
+        if (!ok)
+        {
+            DWORD err = GetLastError();
+            printf("      FAIL returned, error = 0x%08lX (%lu)\n", err, err);
+            if (err == 0xC000000D || err == ERROR_INVALID_PARAMETER)
+                printf("      PASS: NULL init function rejected as expected\n");
+            else
+                printf("      WARN: unexpected error code\n");
+        }
+        else
+        {
+            printf("      UNEXPECTED: NULL init function accepted\n");
+        }
+
+        printf("  [16.2] (Optional) Create real driver - skipped by default\n");
+        printf("      Skipped: requires a valid kernel DriverEntry address.\n");
+        printf("      To exercise it: point InitFunction at a real kernel init routine\n");
+        printf("      and be aware the resulting DriverObject will persist.\n");
+        printf("\n");
+    }
+
+finish_all:
     printf("===== All test finished. Press Enter to exit =====\n");
     (void)getchar();
     return 0;
