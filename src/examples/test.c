@@ -55,7 +55,9 @@
 #define R0SKOH_ACCESS_MODE_USER         1
 #define R0SKOH_ACCESS_MODE_KERNEL       0
 
-#define VAR_ID_G_DRIVEROBJECT   0x003B
+static const WCHAR VAR_NAME_G_DRIVEROBJECT[] = L"g_DriverObject";
+#define VAR_ID_G_DRIVEROBJECT \
+    (R0SIMULATE_VAR_NAME_FLAG | (UINT64)(ULONG_PTR)VAR_NAME_G_DRIVEROBJECT)
 
 static void print_last_error(const char* msg)
 {
@@ -683,7 +685,8 @@ thread_done:
         UCHAR  outData[64] = {0};
         ULONG  info = 0;
 
-        printf("  [15.1] Read g_DriverObject from variable table (ID=0x%04X)\n", VAR_ID_G_DRIVEROBJECT);
+        printf("  [15.1] Read g_DriverObject from variable table (name=%ls)\n",
+               VAR_NAME_G_DRIVEROBJECT);
         ok = R0SimulateSetInternalVariables(
             R0SIMULATE_VAR_OP_GET,
             VAR_ID_G_DRIVEROBJECT,
