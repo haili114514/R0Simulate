@@ -491,9 +491,7 @@ static LIST_ENTRY   g_Win32kSsdtListHead;
 static KSPIN_LOCK   g_Win32kSsdtListLock;
 static BOOLEAN      g_Win32kSsdtBuilt = FALSE;
 static ULONG        g_SsnTableSelect  = 0;
-static ULONG    g_LastIoctlPid    = 0;
-static ULONG    g_LastIoctlTid    = 0;
-static UINT64   g_LastIoctlTime   = 0;
+static UINT64 g_StartTime = 0;
 static ULONG  g_RateLimitEnable    = 0;
 static ULONG  g_RateLimitPerMinute = 0;
 static ULONG  g_RateWindowCount = 0;
@@ -870,9 +868,7 @@ static VOID RegisterAllVariables(VOID)
     R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_VersionMinor,        L"g_VersionMinor",        NULL);
     R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_VersionBuild,        L"g_VersionBuild",        NULL);
     R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_VersionRevision,     L"g_VersionRevision",     NULL);
-    R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_LastIoctlPid,        L"g_LastIoctlPid",        NULL);
-    R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_LastIoctlTid,        L"g_LastIoctlTid",        NULL);
-    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_LastIoctlTime,       L"g_LastIoctlTime",       NULL);
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_StartTime, L"g_StartTime", NULL);
     R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_RateLimitEnable,     L"g_RateLimitEnable",     NULL);
     R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_RateLimitPerMinute,  L"g_RateLimitPerMinute",  NULL);
     R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_RateWindowCount,  L"g_RateWindowCount", NULL);
@@ -4244,13 +4240,6 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         info   = 0;
     }
 
-    __try {
-        g_LastIoctlPid  = (ULONG)(ULONG_PTR)PsGetCurrentProcessId();
-        g_LastIoctlTid  = (ULONG)(ULONG_PTR)PsGetCurrentThreadId();
-        g_LastIoctlTime = (UINT64)KeQueryInterruptTime();
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) { }
-
     R0S_LogOut(code, idx, status, info, outputBuffer, outputSize);
 
     Irp->IoStatus.Status = status;
@@ -4267,6 +4256,8 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     BOOLEAN deviceCreated = FALSE;
 
     UNREFERENCED_PARAMETER(RegistryPath);
+
+    g_StartTime = (UINT64)KeQueryInterruptTime();
 
     status = InitDynamicOffsets();
     if (!NT_SUCCESS(status)) return status;
