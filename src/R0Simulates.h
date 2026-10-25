@@ -274,6 +274,7 @@ typedef struct _R0S_CREATE_THREAD_INPUT {
     UINT64 StartContext;
     ULONG  DesiredAccess;
     ULONG  Reserved;
+    UINT64 ProcessHandle;
 } R0S_CREATE_THREAD_INPUT, *PR0S_CREATE_THREAD_INPUT;
 
 typedef struct _R0S_CREATE_THREAD_OUTPUT {
@@ -417,6 +418,7 @@ R0SIMULATES_API BOOL R0SimulateCreateSystemThread(
     UINT64  startRoutine,
     UINT64  startContext,
     ULONG   desiredAccess,
+    HANDLE  processHandle,
     PHANDLE pOutThreadHandle);
 
 R0SIMULATES_API BOOL R0SimulateDirectCreateDriver(

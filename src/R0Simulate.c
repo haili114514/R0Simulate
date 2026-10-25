@@ -367,6 +367,7 @@ typedef struct _R0S_CREATE_THREAD_INPUT {
     UINT64 StartContext;
     ULONG  DesiredAccess;
     ULONG  Reserved;
+    UINT64 ProcessHandle;
 } R0S_CREATE_THREAD_INPUT, *PR0S_CREATE_THREAD_INPUT;
 
 typedef struct _R0S_CREATE_THREAD_OUTPUT {
@@ -3591,7 +3592,8 @@ NTSTATUS R0SimulateCreateSystemThread(PVOID InputBuffer, ULONG InputSize,
     NTSTATUS status;
     R0S_CREATE_THREAD_INPUT in;
     PR0S_CREATE_THREAD_OUTPUT pOut;
-    HANDLE hThread = NULL;
+    HANDLE hThread  = NULL;
+    HANDLE hProcess = NULL;
     OBJECT_ATTRIBUTES objAttr;
 
     if (!InputBuffer || InputSize < sizeof(R0S_CREATE_THREAD_INPUT))
@@ -3609,11 +3611,16 @@ NTSTATUS R0SimulateCreateSystemThread(PVOID InputBuffer, ULONG InputSize,
 
     InitializeObjectAttributes(&objAttr, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
 
+    if (in.ProcessHandle != 0)
+        hProcess = (HANDLE)(ULONG_PTR)in.ProcessHandle;
+
     __try {
         status = PsCreateSystemThread(
             &hThread,
             in.DesiredAccess ? in.DesiredAccess : THREAD_ALL_ACCESS,
-            &objAttr, NULL, NULL,
+            &objAttr,
+            hProcess,
+            NULL,
             (PKSTART_ROUTINE)(ULONG_PTR)in.StartRoutine,
             (PVOID)(ULONG_PTR)in.StartContext);
     } __except (EXCEPTION_EXECUTE_HANDLER) { status = GetExceptionCode(); }
