@@ -897,6 +897,7 @@ R0SIMULATES_API BOOL R0SimulateCreateSystemThread(
     UINT64  startRoutine,
     UINT64  startContext,
     ULONG   desiredAccess,
+    HANDLE  processHandle,
     PHANDLE pOutThreadHandle)
 {
     BOOL result = FALSE;
@@ -915,6 +916,7 @@ R0SIMULATES_API BOOL R0SimulateCreateSystemThread(
     in.StartRoutine  = startRoutine;
     in.StartContext  = startContext;
     in.DesiredAccess = desiredAccess;
+    in.ProcessHandle = (UINT64)(ULONG_PTR)processHandle;
 
     memset(&out, 0, sizeof(out));
     memset(&ioStatus, 0, sizeof(ioStatus));

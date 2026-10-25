@@ -1924,7 +1924,7 @@ NTSTATUS R0SimulateAPI(PVOID ApiAddress, ULONG Argc, UINT64 *Args, UINT64 *Retur
     NTSTATUS status = STATUS_SUCCESS;
     UINT64 ret = 0;
 
-    if (!ApiAddress || !Args || Argc > 32)
+    if (!ApiAddress || Argc > 32)
         return STATUS_INVALID_PARAMETER;
 
     __try {
