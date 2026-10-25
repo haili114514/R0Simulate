@@ -1135,7 +1135,9 @@ R0SIMULATES_API BOOL R0SimulateArbitraryDriverCall(
     ULONG  outSize,
     PULONG pInformation,
     ULONG  requestorMode,
-    UINT64 fileObject)
+    UINT64 fileObject,
+    PVOID  type3InputBuffer,
+    PVOID  userOutputBuffer)
 {
     BOOL result = FALSE;
     SIZE_T totalInSize;
@@ -1160,19 +1162,21 @@ R0SIMULATES_API BOOL R0SimulateArbitraryDriverCall(
         return FALSE;
     }
 
-    pIn->DriverObject  = driverObject;
-    pIn->MajorFunction = majorFunction;
-    pIn->MinorFunction = minorFunction;
-    pIn->IoControlCode = ioControlCode;
-    pIn->InputLength   = inputLength;
-    pIn->OutputLength  = outSize;
+    pIn->DriverObject      = driverObject;
+    pIn->MajorFunction     = majorFunction;
+    pIn->MinorFunction     = minorFunction;
+    pIn->IoControlCode     = ioControlCode;
+    pIn->InputLength       = inputLength;
+    pIn->OutputLength      = outSize;
 
-    pIn->RequestorMode = (requestorMode == R0S_REQUESTOR_MODE_USER)
-                         ? R0S_REQUESTOR_MODE_USER
-                         : R0S_REQUESTOR_MODE_KERNEL;
+    pIn->RequestorMode     = (requestorMode == R0S_REQUESTOR_MODE_USER)
+                             ? R0S_REQUESTOR_MODE_USER
+                             : R0S_REQUESTOR_MODE_KERNEL;
 
-    pIn->Reserved      = 0;
-    pIn->FileObject    = fileObject;
+    pIn->Reserved          = 0;
+    pIn->FileObject        = fileObject;
+    pIn->Type3InputBuffer  = (UINT64)(ULONG_PTR)type3InputBuffer;
+    pIn->UserOutputBuffer  = (UINT64)(ULONG_PTR)userOutputBuffer;
 
     if (inputLength > 0) {
         memcpy(pIn->Data, pInputData, inputLength);

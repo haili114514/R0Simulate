@@ -107,7 +107,7 @@ typedef struct _CALL_KERNEL_API_INPUT {
     ULONG   ApiNameLength;
     ULONG   ArgumentCount;
     ULONG   Flags;
-    UINT64  Arguments[16];
+    UINT64  Arguments[32];
     WCHAR   ApiName[1];
 } CALL_KERNEL_API_INPUT, *PCALL_KERNEL_API_INPUT;
 
@@ -304,13 +304,13 @@ typedef struct _R0S_MSR_OUTPUT {
     NTSTATUS Status;
 } R0S_MSR_OUTPUT, *PR0S_MSR_OUTPUT;
 
-// ----- APC (replaces IRQL) -----
+// ----- APC -----
 typedef struct _SYNC_KERNEL_APC_INPUT {
     HANDLE   ThreadId;
     UINT64   FunctionAddress;
     ULONG    ArgumentCount;
     ULONG    Reserved;
-    UINT64   Arguments[16];
+    UINT64   Arguments[32];
     HANDLE   CompletionEvent;
     PVOID    ResultBuffer;
 } SYNC_KERNEL_APC_INPUT, *PSYNC_KERNEL_APC_INPUT;
@@ -330,6 +330,8 @@ typedef struct _R0S_CALL_DRIVER_INPUT {
     ULONG  RequestorMode;
     ULONG  Reserved;
     UINT64 FileObject;
+    UINT64 Type3InputBuffer;
+    UINT64 UserOutputBuffer;
     UCHAR  Data[1];
 } R0S_CALL_DRIVER_INPUT, *PR0S_CALL_DRIVER_INPUT;
 
@@ -447,7 +449,9 @@ R0SIMULATES_API BOOL R0SimulateArbitraryDriverCall(
     ULONG  outSize,
     PULONG pInformation,
     ULONG  requestorMode,
-    UINT64 fileObject);
+    UINT64 fileObject,
+    PVOID  type3InputBuffer,
+    PVOID  userOutputBuffer);
 
 #ifdef __cplusplus
 }
