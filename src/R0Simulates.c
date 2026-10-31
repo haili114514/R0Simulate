@@ -159,7 +159,7 @@ R0SIMULATES_API UINT64 R0SimulateAPI(const WCHAR* pwszApiName, ULONG argc, ULONG
     BOOL useAddress, useSsn;
     ULONG nameLen = 0;
     size_t totalInSize;
-    WCHAR ssnStr[16] = {0};
+    WCHAR ssnStr[32] = {0};
     PCALL_KERNEL_API_INPUT pIn;
     CALL_KERNEL_API_OUTPUT out;
     IO_STATUS_BLOCK ioStatus;
@@ -167,7 +167,7 @@ R0SIMULATES_API UINT64 R0SimulateAPI(const WCHAR* pwszApiName, ULONG argc, ULONG
     va_list args;
 
     if (!R0Sim_OpenDriver()) return 0;
-    if (argc > 16) {
+    if (argc > 32) {
         RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
         return 0;
     }
@@ -186,7 +186,7 @@ R0SIMULATES_API UINT64 R0SimulateAPI(const WCHAR* pwszApiName, ULONG argc, ULONG
         if (ssn == 0) {
             ssnStr[idx++] = L'0';
         } else {
-            WCHAR tmp[16];
+            WCHAR tmp[32];
             int t = 0;
             while (ssn > 0 && t < 15) {
                 tmp[t++] = L'0' + (ssn % 10);
@@ -231,7 +231,7 @@ R0SIMULATES_API UINT64 R0SimulateAPI(const WCHAR* pwszApiName, ULONG argc, ULONG
     va_start(args, flags);
     {
         ULONG i;
-        for (i = 0; i < argc && i < 16; i++) {
+        for (i = 0; i < argc && i < 32; i++) {
             pIn->Arguments[i] = va_arg(args, UINT64);
         }
     }
@@ -1076,7 +1076,7 @@ R0SIMULATES_API BOOL R0SimulateAPC(
 
     if (!R0Sim_OpenDriver()) return FALSE;
 
-    if (!threadId || !functionAddress || argc > 16) {
+    if (!threadId || !functionAddress || argc > 32) {
         RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
@@ -1097,7 +1097,7 @@ R0SIMULATES_API BOOL R0SimulateAPC(
     va_start(args, resultBuffer);
     {
         ULONG i;
-        for (i = 0; i < argc && i < 16; i++)
+        for (i = 0; i < argc && i < 32; i++)
             pIn->Arguments[i] = va_arg(args, UINT64);
     }
     va_end(args);
