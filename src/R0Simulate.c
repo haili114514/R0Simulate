@@ -890,6 +890,7 @@ static VOID RegisterAllVariables(VOID)
     R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_RateLimitPerMinute,  L"g_RateLimitPerMinute",  NULL);
     R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_RateWindowCount,  L"g_RateWindowCount", NULL);
     R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_RateWindowStart,  L"g_RateWindowStart", NULL);
+    R0sRegisterVariable(sizeof(PVOID),  (PVOID)(ULONG_PTR)&g_RateLock,       L"g_RateLock",       NULL);
     R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_Slot,  L"g_Slot",  NULL);
     R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_AuthMode,            L"g_AuthMode",            NULL);
     R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_AuthDefaultMask, L"g_AuthDefaultMask", NULL);
