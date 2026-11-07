@@ -21,11 +21,11 @@ extern "C" {
 #define IOCTL_R0SIMULATE_KERNEL_MEMORY_ACCESS       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_GET_SYSTEM_TOKEN           CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_SET_INTERNAL_VARS          CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_BUFFERED,  FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_IO                         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x809, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_AUTHORIZED_LIST            CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80A, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_CREATE_SYSTEM_THREAD       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80B, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_DIRECT_CREATE_DRIVER       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80C, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_CALLBACK_CONTROL           CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80C, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_MSR                        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80D, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_APC                        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80E, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_ARBITRARY_DRIVER_CALL      CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80F, METHOD_NEITHER, FILE_ANY_ACCESS)
@@ -91,6 +91,57 @@ extern "C" {
 
 #define R0S_REQUESTOR_MODE_KERNEL   0x00
 #define R0S_REQUESTOR_MODE_USER     0x01
+
+#define R0SCB_PROCESS_CREATE        0
+#define R0SCB_PROCESS_TERMINATE     1
+#define R0SCB_THREAD_CREATE         2
+#define R0SCB_THREAD_TERMINATE      3
+#define R0SCB_IMAGE_LOAD            4
+#define R0SCB_OBJECT_HANDLE         5
+#define R0SCB_REGISTRY              6
+#define R0SCB_FILE                  7
+#define R0SCB_POWER_STATE           8
+#define R0SCB_SYSTEM_TIME           9
+#define R0SCB_PNP                   10
+#define R0SCB_DEBUG_PRINT           11
+#define R0SCB_INTERRUPT             12
+#define R0SCB_LOGON_SESSION_TERM    13
+#define R0SCB_LAST_CHANCE_SHUTDOWN  14
+#define R0SCB_NMI                   15
+#define R0SCB_IOCTL_EXEC_INSTRUCTION      16
+#define R0SCB_IOCTL_CALL_KERNEL_API       17
+#define R0SCB_IOCTL_PROCESS_HIDING        18
+#define R0SCB_IOCTL_PREVIOUS_MODE_SWITCH  19
+#define R0SCB_IOCTL_KERNEL_OPEN_HANDLE    20
+#define R0SCB_IOCTL_KERNEL_MEMORY_ACCESS  21
+#define R0SCB_IOCTL_GET_SYSTEM_TOKEN      22
+#define R0SCB_IOCTL_SET_INTERNAL_VARS     23
+#define R0SCB_IOCTL_GET_KERNEL_FUNCTION   24
+#define R0SCB_IOCTL_IO                    25
+#define R0SCB_IOCTL_AUTHORIZED_LIST       26
+#define R0SCB_IOCTL_CREATE_SYSTEM_THREAD  27
+#define R0SCB_IOCTL_CALLBACK_CONTROL      28
+#define R0SCB_IOCTL_MSR                   29
+#define R0SCB_IOCTL_APC                   30
+#define R0SCB_IOCTL_ARBITRARY_DRIVER_CALL 31
+#define R0SCB_COUNT                       32
+
+// ----- R0SimulateCallbackControl -----
+#define R0SCB_OP_ADD      0x01
+#define R0SCB_OP_REMOVE   0x02
+#define R0SCB_OP_SET      0x03
+#define R0SCB_OP_GET      0x04
+#define R0SCB_OP_LIST     0x05
+
+#define R0SCB_GET_MASK        0
+#define R0SCB_GET_PRIORITY    1
+#define R0SCB_GET_CALLCOUNT   2
+#define R0SCB_GET_EXITSTATUS  3
+#define R0SCB_GET_LASTRESULT  4
+#define R0SCB_GET_PENDING     5
+
+#define R0SCB_SET_FLAG_MASK      0x01
+#define R0SCB_SET_FLAG_PRIORITY  0x02
 
 // ----- Structures -----
 typedef struct _EXEC_INSTRUCTION_INPUT {
@@ -282,18 +333,6 @@ typedef struct _R0S_CREATE_THREAD_OUTPUT {
     NTSTATUS Status;
 } R0S_CREATE_THREAD_OUTPUT, *PR0S_CREATE_THREAD_OUTPUT;
 
-typedef struct _R0S_CREATE_DRIVER_INPUT {
-    UINT64 InitFunction;
-    ULONG  NameLength;
-    ULONG  Reserved;
-    WCHAR  Name[1];
-} R0S_CREATE_DRIVER_INPUT, *PR0S_CREATE_DRIVER_INPUT;
-
-typedef struct _R0S_CREATE_DRIVER_OUTPUT {
-    UINT64   DriverObject;
-    NTSTATUS Status;
-} R0S_CREATE_DRIVER_OUTPUT, *PR0S_CREATE_DRIVER_OUTPUT;
-
 typedef struct _R0S_MSR_INPUT {
     ULONG  Operation;
     ULONG  Msr;
@@ -305,7 +344,6 @@ typedef struct _R0S_MSR_OUTPUT {
     NTSTATUS Status;
 } R0S_MSR_OUTPUT, *PR0S_MSR_OUTPUT;
 
-// ----- APC -----
 typedef struct _SYNC_KERNEL_APC_INPUT {
     HANDLE   ThreadId;
     UINT64   FunctionAddress;
@@ -342,6 +380,63 @@ typedef struct _R0S_CALL_DRIVER_OUTPUT {
     ULONG    Reserved;
     UCHAR    Data[1];
 } R0S_CALL_DRIVER_OUTPUT, *PR0S_CALL_DRIVER_OUTPUT;
+
+typedef struct _R0S_CALLBACK_CONTEXT {
+    ULONG    CallbackIndex;
+    ULONG    Reserved;
+    NTSTATUS Status;
+    UINT64   Args[8];
+    UINT64   NewAccessMask;
+    ULONG    HasNewAccess;
+    ULONG    Reserved2;
+    WCHAR    Text[260];
+} R0S_CALLBACK_CONTEXT, *PR0S_CALLBACK_CONTEXT;
+
+typedef struct _R0S_CB_BASE_INPUT {
+    ULONG Operation;
+    ULONG TargetTid;
+} R0S_CB_BASE_INPUT, *PR0S_CB_BASE_INPUT;
+
+typedef struct _R0S_CB_ADD_INPUT {
+    R0S_CB_BASE_INPUT Base;
+    ULONG  Priority;
+    ULONG  Reserved;
+    HANDLE NotifyEvent;
+    HANDLE SyncEvent;
+    PVOID  SharedBuffer;
+    ULONG  SharedBufferSize;
+    ULONG  Reserved2;
+} R0S_CB_ADD_INPUT, *PR0S_CB_ADD_INPUT;
+
+typedef struct _R0S_CB_SET_INPUT {
+    R0S_CB_BASE_INPUT Base;
+    UINT64 Mask;
+    ULONG  Priority;
+    ULONG  Flags;
+} R0S_CB_SET_INPUT, *PR0S_CB_SET_INPUT;
+
+typedef struct _R0S_CB_GET_INPUT {
+    R0S_CB_BASE_INPUT Base;
+    ULONG  GetType;
+    ULONG  Reserved;
+} R0S_CB_GET_INPUT, *PR0S_CB_GET_INPUT;
+
+typedef struct _R0S_CALLBACK_ENTRY_INFO {
+    HANDLE    ThreadId;
+    NTSTATUS  ExitStatus;
+    ULONG     Priority;
+    UINT64    Mask;
+    ULONG     CallCount;
+    UINT64    LastResult;
+} R0S_CALLBACK_ENTRY_INFO, *PR0S_CALLBACK_ENTRY_INFO;
+
+typedef struct _R0S_CALLBACK_CTL_OUTPUT {
+    ULONG  Count;
+    ULONG  Reserved;
+    UINT64 Enabled;
+    WCHAR  Altitude[32];
+    R0S_CALLBACK_ENTRY_INFO Entries[1];
+} R0S_CALLBACK_CTL_OUTPUT, *PR0S_CALLBACK_CTL_OUTPUT;
 
 // ----- Exported Functions -----
 R0SIMULATES_API UINT64 R0SimulateISA(
@@ -421,10 +516,20 @@ R0SIMULATES_API BOOL R0SimulateCreateSystemThread(
     HANDLE  processHandle,
     PHANDLE pOutThreadHandle);
 
-R0SIMULATES_API BOOL R0SimulateDirectCreateDriver(
-    UINT64       initFunction,
-    const WCHAR* driverName,
-    PUINT64      pOutDriverObject);
+R0SIMULATES_API BOOL R0SimulateCallbackControl(
+    ULONG   Operation,
+    ULONG   targetTid,
+    UINT64  mask,
+    ULONG   priority,
+    ULONG   setFlags,
+    ULONG   getType,
+    HANDLE  notifyEvent,
+    HANDLE  syncEvent,
+    PVOID   sharedBuffer,
+    ULONG   sharedBufferSize,
+    PVOID   pOutBuffer,
+    ULONG   outSize,
+    PULONG  pInfoCount);
 
 R0SIMULATES_API BOOL R0SimulateMSR(
     ULONG   operation,

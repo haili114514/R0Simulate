@@ -1,18 +1,20 @@
 #define _CRT_SECURE_NO_WARNINGS
+#pragma warning(disable:4100 4189 4211 4819 4324 4505)
+#pragma warning(disable:4013)
 #include <ntifs.h>
 #include <ntddk.h>
 #include <ntstatus.h>
 #include <ntimage.h>
 #include <intrin.h>
+#include <fltKernel.h>
+#include <ntstrsafe.h>
+#include <wdmguid.h>
 
 #ifndef PKNORMAL_ROUTINE
 typedef VOID (NTAPI *PKNORMAL_ROUTINE)(PVOID NormalContext,
                                        PVOID SystemArgument1,
                                        PVOID SystemArgument2);
 #endif
-
-#pragma warning(disable:4100 4189 4211 4819)
-#pragma warning(disable:4013)
 
 #define DEVICE_NAME     L"\\Device\\R0Simulate"
 #define SYM_LINK_NAME   L"\\DosDevices\\R0Simulate"
@@ -22,22 +24,22 @@ typedef VOID (NTAPI *PKNORMAL_ROUTINE)(PVOID NormalContext,
 #define R0S_IOCTL_LIMIT   (R0S_IOCTL_BASE + R0S_IOCTL_LAST + 1)
 #define R0S_IOCTL_COUNT   (R0S_IOCTL_LAST + 1)
 
-#define IOCTL_R0SIMULATE_EXEC_INSTRUCTION           CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_CALL_KERNEL_API            CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_EXEC_INSTRUCTION           CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_NEITHER,  FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_CALL_KERNEL_API            CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_NEITHER,  FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_KERNEL_PROCESS_HIDING      CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_PREVIOUS_MODE_SWITCH       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_KERNEL_OPEN_HANDLE         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_KERNEL_MEMORY_ACCESS       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_GET_SYSTEM_TOKEN           CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_PREVIOUS_MODE_SWITCH       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_NEITHER,  FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_KERNEL_OPEN_HANDLE         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_NEITHER,  FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_KERNEL_MEMORY_ACCESS       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_NEITHER,  FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_GET_SYSTEM_TOKEN           CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_NEITHER,  FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_SET_INTERNAL_VARS          CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_BUFFERED,  FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_IO                         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x809, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_IO                         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x809, METHOD_NEITHER,  FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_AUTHORIZED_LIST            CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80A, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_CREATE_SYSTEM_THREAD       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80B, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_DIRECT_CREATE_DRIVER       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80C, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_MSR                        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80D, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_CREATE_SYSTEM_THREAD       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80B, METHOD_NEITHER,  FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_CALLBACK_CONTROL           CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80C, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_MSR                        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80D, METHOD_NEITHER,  FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_APC                        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80E, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_ARBITRARY_DRIVER_CALL      CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80F, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_ARBITRARY_DRIVER_CALL      CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80F, METHOD_NEITHER,  FILE_ANY_ACCESS)
 
 #define IOCTL_INDEX_EXEC_INSTRUCTION       0x00
 #define IOCTL_INDEX_CALL_KERNEL_API        0x01
@@ -51,23 +53,21 @@ typedef VOID (NTAPI *PKNORMAL_ROUTINE)(PVOID NormalContext,
 #define IOCTL_INDEX_IO                     0x09
 #define IOCTL_INDEX_AUTHORIZED_LIST        0x0A
 #define IOCTL_INDEX_CREATE_SYSTEM_THREAD   0x0B
-#define IOCTL_INDEX_DIRECT_CREATE_DRIVER   0x0C
+
+#define IOCTL_INDEX_CALLBACK_CONTROL       0x0C
 #define IOCTL_INDEX_MSR                    0x0D
 #define IOCTL_INDEX_APC                    0x0E
 #define IOCTL_INDEX_ARBITRARY_DRIVER_CALL  0x0F
 
 #define R0S_IOCTL_FUNCTION_OF(code)  (((code) & 0x3FFCUL) >> 2)
-
 #define R0S_IOCTL_INDEX_OF(code) \
     ((R0S_IOCTL_FUNCTION_OF(code) >= R0S_IOCTL_BASE && \
       R0S_IOCTL_FUNCTION_OF(code) <  R0S_IOCTL_LIMIT) \
         ? (R0S_IOCTL_FUNCTION_OF(code) - R0S_IOCTL_BASE) : 0xFFFFFFFFUL)
 
+#define R0SIMULATE_FLAG_USE_ADDRESS  0x00000001
 #define R0S_MASK_TEST(m, idx) \
     (((idx) < R0S_IOCTL_COUNT) ? (((m) >> (idx)) & 1ULL) : 0ULL)
-
-#define R0SIMULATE_FLAG_USE_ADDRESS  0x00000001
-
 #define R0S_MASK_PRIVILEGED   (~0ULL)
 
 #define R0SPMS_MODE_KERNEL   0x00
@@ -99,7 +99,6 @@ typedef VOID (NTAPI *PKNORMAL_ROUTINE)(PVOID NormalContext,
 #define R0SAUTH_OP_LIST     0x03
 #define R0SAUTH_OP_SET      0x04
 #define R0SAUTH_OP_GET      0x05
-
 #define R0SAUTH_GET_MASK        0
 #define R0SAUTH_GET_EXITSTATUS  1
 
@@ -127,6 +126,43 @@ typedef enum _KAPC_ENVIRONMENT {
     ThreadApcEnvironment
 } KAPC_ENVIRONMENT;
 #endif
+
+#define R0SCB_PROCESS_CREATE         0
+#define R0SCB_PROCESS_TERMINATE      1
+#define R0SCB_THREAD_CREATE          2
+#define R0SCB_THREAD_TERMINATE       3
+#define R0SCB_IMAGE_LOAD             4
+#define R0SCB_OBJECT_HANDLE          5
+#define R0SCB_REGISTRY               6
+#define R0SCB_FILE                   7
+#define R0SCB_POWER_STATE            8
+#define R0SCB_SYSTEM_TIME            9
+#define R0SCB_PNP                    10
+#define R0SCB_DEBUG_PRINT            11
+#define R0SCB_INTERRUPT              12
+#define R0SCB_LOGON_SESSION_TERM     13
+#define R0SCB_LAST_CHANCE_SHUTDOWN   14
+#define R0SCB_NMI                    15
+#define R0SCB_IOCTL_BASE             16   
+#define R0SCB_TOTAL_COUNT            32
+
+#define R0SCB_OP_ADD      0x01
+#define R0SCB_OP_REMOVE   0x02
+#define R0SCB_OP_SET      0x03
+#define R0SCB_OP_GET      0x04
+#define R0SCB_OP_LIST     0x05
+
+#define R0SCB_GET_MASK        0
+#define R0SCB_GET_PRIORITY    1
+#define R0SCB_GET_CALLCOUNT   2
+#define R0SCB_GET_EXITSTATUS  3
+#define R0SCB_GET_LASTRESULT  4
+#define R0SCB_GET_PENDING     5
+
+#define R0S_CB_SNAPSHOT_MAX 64
+
+#define R0SCB_SET_FLAG_MASK      0x01
+#define R0SCB_SET_FLAG_PRIORITY  0x02
 
 typedef struct _EXEC_INSTRUCTION_INPUT {
     ULONG   InstructionSize;
@@ -195,8 +231,8 @@ typedef struct _HIDDEN_PROCESS_ENTRY {
     LIST_ENTRY ListEntry;
     HANDLE     ProcessId;
     PEPROCESS  EProcess;
-    PLIST_ENTRY OriginalBlink;   
-    PLIST_ENTRY OriginalFlink;   
+    PLIST_ENTRY OriginalBlink;
+    PLIST_ENTRY OriginalFlink;
 } HIDDEN_PROCESS_ENTRY, *PHIDDEN_PROCESS_ENTRY;
 
 typedef struct _KERNEL_MEMORY_ACCESS_INPUT {
@@ -375,18 +411,6 @@ typedef struct _R0S_CREATE_THREAD_OUTPUT {
     NTSTATUS Status;
 } R0S_CREATE_THREAD_OUTPUT, *PR0S_CREATE_THREAD_OUTPUT;
 
-typedef struct _R0S_CREATE_DRIVER_INPUT {
-    UINT64 InitFunction;
-    ULONG  NameLength;
-    ULONG  Reserved;
-    WCHAR  Name[1];
-} R0S_CREATE_DRIVER_INPUT, *PR0S_CREATE_DRIVER_INPUT;
-
-typedef struct _R0S_CREATE_DRIVER_OUTPUT {
-    UINT64   DriverObject;
-    NTSTATUS Status;
-} R0S_CREATE_DRIVER_OUTPUT, *PR0S_CREATE_DRIVER_OUTPUT;
-
 typedef struct _R0S_MSR_INPUT {
     ULONG  Operation;
     ULONG  Msr;
@@ -431,10 +455,10 @@ typedef struct _R0S_CALL_DRIVER_INPUT {
     ULONG  OutputLength;
     ULONG  RequestorMode;
     ULONG  Reserved;
-    UINT64 FileObject;          
-    UINT64 Type3InputBuffer;    
-    UINT64 UserOutputBuffer;    
-    UCHAR  Data[1];             
+    UINT64 FileObject;
+    UINT64 Type3InputBuffer;
+    UINT64 UserOutputBuffer;
+    UCHAR  Data[1];
 } R0S_CALL_DRIVER_INPUT, *PR0S_CALL_DRIVER_INPUT;
 
 typedef struct _R0S_CALL_DRIVER_OUTPUT {
@@ -457,6 +481,92 @@ typedef struct _WIN32U_MAP {
     WCHAR  Name[64];
 } WIN32U_MAP, *PWIN32U_MAP;
 
+typedef struct _R0S_CALLBACK_CONTEXT {
+    ULONG    CallbackIndex;
+    ULONG    Reserved;
+    NTSTATUS Status;
+    UINT64   Args[8];
+    UINT64   NewAccessMask;
+    ULONG    HasNewAccess;
+    ULONG    NotifyOnly;
+    WCHAR    Text[260];
+} R0S_CALLBACK_CONTEXT, *PR0S_CALLBACK_CONTEXT;
+
+typedef struct _R0S_EVENT_NODE {
+    LIST_ENTRY            ListEntry;
+    R0S_CALLBACK_CONTEXT  ctx;
+} R0S_EVENT_NODE, *PR0S_EVENT_NODE;
+
+typedef struct _R0S_CALLBACK_ENTRY {
+    LIST_ENTRY    ListEntry;
+    HANDLE        ThreadId;
+    PETHREAD      Thread;
+    PEPROCESS     OwnerProcess;
+    UINT64        CallbackMask;      
+    ULONG         Priority;          
+    NTSTATUS      ExitStatus;
+    ULONG         CallCount;
+    NTSTATUS      LastResult;
+    LARGE_INTEGER RegisterTime;
+    PKEVENT       NotifyEvent;
+    PKEVENT       SyncEvent;
+    PR0S_CALLBACK_CONTEXT SharedBuffer;
+    ULONG         SharedBufferSize;
+    volatile LONG RefCount;   
+    volatile LONG Removing;   
+    LIST_ENTRY    EventQueueHead;
+    KSPIN_LOCK    QueueLock;
+    LONG          EventCount;
+    ULONG         TotalEventCount;
+    BOOLEAN       QueueInitialized;
+} R0S_CALLBACK_ENTRY, *PR0S_CALLBACK_ENTRY;
+
+typedef struct _R0S_CB_BASE_INPUT {
+    ULONG Operation;
+    ULONG TargetTid;        
+} R0S_CB_BASE_INPUT, *PR0S_CB_BASE_INPUT;
+
+typedef struct _R0S_CB_ADD_INPUT {
+    R0S_CB_BASE_INPUT Base;
+    ULONG  Priority;        
+    ULONG  Reserved;
+    HANDLE NotifyEvent;
+    HANDLE SyncEvent;
+    UINT64 SharedBuffer;
+    ULONG  SharedBufferSize;
+    ULONG  Reserved2;
+} R0S_CB_ADD_INPUT, *PR0S_CB_ADD_INPUT;
+
+typedef struct _R0S_CB_SET_INPUT {
+    R0S_CB_BASE_INPUT Base;
+    UINT64 Mask;
+    ULONG  Priority;
+    ULONG  Flags;
+} R0S_CB_SET_INPUT, *PR0S_CB_SET_INPUT;
+
+typedef struct _R0S_CB_GET_INPUT {
+    R0S_CB_BASE_INPUT Base;
+    ULONG  GetType;
+    ULONG  Reserved;
+} R0S_CB_GET_INPUT, *PR0S_CB_GET_INPUT;
+
+typedef struct _R0S_CALLBACK_ENTRY_INFO {
+    HANDLE    ThreadId;
+    NTSTATUS  ExitStatus;
+    ULONG     Priority;
+    UINT64    Mask;
+    ULONG     CallCount;
+    UINT64    LastResult;
+} R0S_CALLBACK_ENTRY_INFO, *PR0S_CALLBACK_ENTRY_INFO;
+
+typedef struct _R0S_CALLBACK_CTL_OUTPUT {
+    ULONG  Count;
+    ULONG  Reserved;
+    UINT64 Enabled;
+    WCHAR  Altitude[32];
+    R0S_CALLBACK_ENTRY_INFO Entries[1];
+} R0S_CALLBACK_CTL_OUTPUT, *PR0S_CALLBACK_CTL_OUTPUT;
+
 PDEVICE_OBJECT  g_DeviceObject = NULL;
 UNICODE_STRING  g_SymLinkName;
 PDRIVER_OBJECT  g_DriverObject = NULL;
@@ -478,7 +588,7 @@ static BOOLEAN      g_SsdtBuilt = FALSE;
 static UINT64  g_IoctlDisable                     = 0;
 static ULONG   g_IoctlCount[R0S_IOCTL_COUNT]   = {0};
 static UINT64  g_IoctlHandler[R0S_IOCTL_COUNT] = {0};
-static UINT64  g_DebugMode                     = 0;
+static UINT64  g_DebugMode = (1ULL << 47);
 static UINT64  g_SecureMode       = 0x2000;
 static ULONG   g_IoctlTotalCount  = 0;
 static UINT64  g_ReadAttrDescriptor_Low   = 0;
@@ -489,16 +599,16 @@ static UINT64  g_HideAttrDescriptor_Low   = 0;
 static UINT64  g_HideAttrDescriptor_High  = 0;
 static UINT64  g_DriverBase      = 0;
 static ULONG   g_DriverSize      = 0;
-static UINT64   g_StartAddress = 0;
+static UINT64  g_StartAddress    = 0;
 static LIST_ENTRY   g_VarTableHead;
 static KSPIN_LOCK   g_VarTableLock;
 static ULONG        g_VarNextId = 1;
 static ULONG        g_AuthMode = 0;
-static UINT64  g_AuthDefaultMask = 0;
+static UINT64       g_AuthDefaultMask = 0;
 static LIST_ENTRY   g_AuthListHead;
 static KSPIN_LOCK   g_AuthListLock;
-static ULONG g_VersionMajor    = 3;
-static ULONG g_VersionMinor    = 2;
+static ULONG g_VersionMajor    = 4;
+static ULONG g_VersionMinor    = 0;
 static ULONG g_VersionBuild    = 0;
 static ULONG g_VersionRevision = 0;
 static LIST_ENTRY   g_Win32kSsdtListHead;
@@ -511,25 +621,47 @@ static ULONG  g_RateWindowCount = 0;
 static UINT64 g_RateWindowStart = 0;
 static KSPIN_LOCK g_RateLock;
 static UINT64   g_Slot   = 0;
+static LIST_ENTRY    g_CallbackEntryListHead;
+static KSPIN_LOCK    g_CallbackEntryLock;
+static UINT64        g_R0CallbackControl  = 0;   
+static ULONG         g_CallbackTimeoutUs  = 10000;       
+static ULONG         g_CallbackAltitude   = 0;        
+static UINT16        g_SysCbActive = 0;
+static PVOID         g_ProcessNotifyHandle       = NULL;
+static PVOID         g_ThreadNotifyHandle        = NULL;
+static PVOID         g_ImageNotifyHandle         = NULL;
+static PVOID         g_ObRegistrationHandle      = NULL;
+static PVOID         g_RegCallbackHandle         = NULL;
+static LARGE_INTEGER g_RegCookie                 = {0};
+static PVOID         g_PowerStateCallbackHandle  = NULL;
+static PVOID         g_SystemTimeCallbackHandle  = NULL;
+static PVOID         g_PnpRegistrationHandle     = NULL;
+static PFLT_FILTER   g_FilterHandle              = NULL;
+static PVOID         g_LogonSessionTerminated    = NULL;
+static PVOID         g_LastChanceShutdown        = NULL;
+static PVOID         g_NmiCallbackHandle         = NULL;
+static PKTIMER       g_InterruptTimer            = NULL;
+static PKDPC         g_InterruptDpc              = NULL;
+static BOOLEAN       g_InterruptTimerRunning     = FALSE;
+static volatile LONG g_InCallbackCount = 0;
+static volatile LONG g_ShuttingDown    = 0;
+static volatile LONG g_InFileNotify = 0;
+
+static const GUID g_GuidDevInterfaceDisk =
+    { 0x53f56307, 0xb6bf, 0x11d0, { 0x94, 0xf2, 0x00, 0xa0, 0xc9, 0x1e, 0xfb, 0x8b } };
 
 NTKERNELAPI PPEB PsGetProcessPeb(PEPROCESS Process);
-NTKERNELAPI NTSTATUS ZwOpenProcessToken(HANDLE ProcessHandle, ACCESS_MASK DesiredAccess, PHANDLE TokenHandle);
-NTKERNELAPI NTSTATUS ZwSetInformationProcess(HANDLE ProcessHandle, ULONG ProcessInformationClass,
-                                             PVOID ProcessInformation, ULONG ProcessInformationLength);
-NTSYSCALLAPI NTSTATUS NTAPI ZwQuerySystemInformation(ULONG SystemInformationClass, PVOID SystemInformation,
-                                                     ULONG SystemInformationLength, ULONG *ReturnLength);
-NTKERNELAPI NTSTATUS ZwOpenProcess(PHANDLE ProcessHandle, ACCESS_MASK DesiredAccess,
-                                   POBJECT_ATTRIBUTES ObjectAttributes, PCLIENT_ID ClientId);
-NTKERNELAPI NTSTATUS ZwDuplicateToken(HANDLE ExistingTokenHandle, ACCESS_MASK DesiredAccess,
-                                      POBJECT_ATTRIBUTES ObjectAttributes, BOOLEAN EffectiveOnly,
-                                      TOKEN_TYPE TokenType, PHANDLE NewTokenHandle);
-NTKERNELAPI NTSTATUS ZwClose(HANDLE Handle);
 NTKERNELAPI BOOLEAN SeSinglePrivilegeCheck(LUID PrivilegeValue, KPROCESSOR_MODE PreviousMode);
-NTKERNELAPI NTSTATUS IoCreateDriver(PUNICODE_STRING DriverName, PDRIVER_INITIALIZE InitializationFunction);
 NTKERNELAPI NTSTATUS PsGetProcessExitStatus(PEPROCESS Process);
 NTKERNELAPI NTSTATUS ZwQueryInformationProcess(HANDLE ProcessHandle, ULONG ProcessInformationClass,
                                                PVOID ProcessInformation, ULONG ProcessInformationLength,
                                                PULONG ReturnLength);
+NTKERNELAPI NTSTATUS CmRegisterCallbackEx(PEX_CALLBACK_FUNCTION Function,
+                                          PCUNICODE_STRING Altitude,
+                                          PVOID Driver,
+                                          PVOID Context,
+                                          PLARGE_INTEGER Cookie,
+                                          PVOID Reserved);
 
 NTSTATUS DriverEntry(PDRIVER_OBJECT, PUNICODE_STRING);
 VOID     DriverUnload(PDRIVER_OBJECT);
@@ -577,16 +709,42 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateIO(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateAuthorizedListOperations(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateCreateSystemThread(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
-NTSTATUS R0SimulateDirectCreateDriver(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
+NTSTATUS R0SimulateCallbackControl(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateMSR(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateAPC(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateArbitraryDriverCall(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
-
+NTSTATUS R0sDispatchCallback(ULONG Index, UINT64 *Args, ULONG ArgCount, UINT64 *NewAccessMask);
+static NTSTATUS R0sInitCallback(ULONG Index);
+static VOID     R0sUninitCallback(ULONG Index);
+VOID            R0sInitCallbacks(VOID);     
+VOID            R0sUninitAllCallbacks(VOID);
+static VOID     R0sFreeCallbackEntry(PR0S_CALLBACK_ENTRY e);
+static ULONG    R0sNextPriority(VOID);
+static VOID R0sProcessNotify(PEPROCESS, HANDLE, PPS_CREATE_NOTIFY_INFO);
+static VOID R0sThreadNotify(HANDLE, HANDLE, BOOLEAN);
+static VOID R0sImageNotify(PUNICODE_STRING, HANDLE, PIMAGE_INFO);
+static OB_PREOP_CALLBACK_STATUS R0sObPreCallback(PVOID, POB_PRE_OPERATION_INFORMATION);
+static NTSTATUS R0sRegistryCallback(PVOID, PVOID, PVOID);
+static VOID R0sPowerStateCallback(PVOID, PVOID, PVOID);
+static VOID R0sSystemTimeCallback(PVOID, PVOID, PVOID);
+static NTSTATUS R0sPnpCallback(PVOID, PVOID);
+static VOID R0sDebugPrintCallback(PSTRING, ULONG, ULONG);
+static VOID R0sInterruptDpc(PKDPC, PVOID, PVOID, PVOID);
+static VOID R0sLogonSessionTerminated(PVOID);
+static VOID R0sLastChanceShutdown(PDEVICE_OBJECT);
+static BOOLEAN R0sNmiCallback(PVOID, BOOLEAN);
+FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreCreate(PFLT_CALLBACK_DATA, PCFLT_RELATED_OBJECTS, PVOID *);
+FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreRead  (PFLT_CALLBACK_DATA, PCFLT_RELATED_OBJECTS, PVOID *);
+FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreWrite (PFLT_CALLBACK_DATA, PCFLT_RELATED_OBJECTS, PVOID *);
+FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreSetInfo(PFLT_CALLBACK_DATA, PCFLT_RELATED_OBJECTS, PVOID *);
+FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreDirCtl (PFLT_CALLBACK_DATA, PCFLT_RELATED_OBJECTS, PVOID *);
+NTSTATUS FLTAPI R0sFltUnload(FLT_FILTER_UNLOAD_FLAGS);
+static VOID R0sNotifyFileOp(PFLT_CALLBACK_DATA, const WCHAR *);
 static VOID R0sApcKernelRoutine(PRKAPC, PKNORMAL_ROUTINE*, PVOID*, PVOID*, PVOID*);
 static VOID R0sApcRundownRoutine(PRKAPC);
 static VOID R0sApcNormalRoutine(PVOID, PVOID, PVOID);
-
 static BOOLEAN  R0sIsIoctlAuthorized(ULONG idx);
+static BOOLEAN  R0sIsPrivileged(PEPROCESS proc);
 static VOID     R0sFreeAuthList(VOID);
 static NTSTATUS R0sIrpCompletion(PDEVICE_OBJECT, PIRP, PVOID);
 static BOOLEAN  R0sWcsEqI(const WCHAR*, const WCHAR*);
@@ -664,6 +822,44 @@ static BOOLEAN R0sWcsEqI(const WCHAR* a, const WCHAR* b)
         result = FALSE;
     }
     return result;
+}
+
+VOID R0sInitCallbacks(VOID)
+{
+    ULONG i;
+    NTSTATUS st;
+
+    for (i = 0; i < R0SCB_IOCTL_BASE; i++) {
+        BOOLEAN active = ((g_SysCbActive >> i) & 1U) != 0;
+
+        if ((g_R0CallbackControl >> i) & 1ULL) {
+            if (!active) {
+                st = R0sInitCallback(i);
+                if (NT_SUCCESS(st))
+                    g_SysCbActive |= (UINT16)(1U << i);
+                else
+                    g_SysCbActive &= (UINT16)~(1U << i);
+
+                if (g_DebugMode & (1ULL << (48 + i)))
+                    DbgPrint("R0S: cb %lu Init st=0x%08X active=%u\n",
+                             i, st, (unsigned)((g_SysCbActive >> i) & 1U));
+            }
+        } else {
+            if (active) {
+                R0sUninitCallback(i);
+                g_SysCbActive &= (UINT16)~(1U << i);
+
+                if (g_DebugMode & (1ULL << (48 + i)))
+                    DbgPrint("R0S: cb %lu Uninit active=%u\n",
+                             i, (unsigned)((g_SysCbActive >> i) & 1U));
+            }
+        }
+
+        if ((g_SysCbActive >> i) & 1U)
+            g_R0CallbackControl |=  (1ULL << i);
+        else
+            g_R0CallbackControl &= ~(1ULL << i);
+    }
 }
 
 static VOID R0sWcsCopyN(WCHAR* dst, const WCHAR* src, ULONG maxChars)
@@ -834,8 +1030,6 @@ static VOID RegisterAllVariables(VOID)
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_PrimaryTokenFrozenOffset, L"g_PrimaryTokenFrozenOffset", NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_FunctionLookupMode,       L"g_FunctionLookupMode",       NULL);
     R0sRegisterVariable(sizeof(ULONG), (PVOID)(ULONG_PTR)&g_GetFunctionMode,          L"g_GetFunctionMode",          NULL);
-
-    
     R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_IoctlDisable, L"g_IoctlDisable", NULL);
 
     for (i = 0; i < R0S_IOCTL_COUNT; i++) {
@@ -901,7 +1095,33 @@ static VOID RegisterAllVariables(VOID)
     R0sRegisterVariable(sizeof(PVOID),  (PVOID)(ULONG_PTR)&g_Win32kSsdtListHead.Flink, L"g_Win32kSsdtListHead.Flink", NULL);
     R0sRegisterVariable(sizeof(PVOID),  (PVOID)(ULONG_PTR)&g_Win32kSsdtListHead.Blink, L"g_Win32kSsdtListHead.Blink", NULL);
     R0sRegisterVariable(sizeof(PVOID),  (PVOID)(ULONG_PTR)&g_Win32kSsdtListLock,       L"g_Win32kSsdtListLock",       NULL);
-    R0sRegisterVariable(sizeof(BOOLEAN),(PVOID)(ULONG_PTR)&g_Win32kSsdtBuilt,          L"g_Win32kSsdtBuilt",          NULL);
+    R0sRegisterVariable(sizeof(BOOLEAN),(PVOID)(ULONG_PTR)&g_Win32kSsdtBuilt,          L"g_Win32kSsdtBuilt",          NULL);    
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_R0CallbackControl, L"g_R0CallbackControl", NULL);
+    R0sRegisterVariable(sizeof(UINT16), (PVOID)(ULONG_PTR)&g_SysCbActive, L"g_SysCbActive", NULL);
+    R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_CallbackTimeoutUs, L"g_CallbackTimeoutUs", NULL);
+    R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_CallbackAltitude,  L"g_CallbackAltitude",  NULL);
+    R0sRegisterVariable(sizeof(PVOID),  (PVOID)(ULONG_PTR)&g_CallbackEntryListHead.Flink, L"g_CallbackEntryListHead.Flink", NULL);
+    R0sRegisterVariable(sizeof(PVOID),  (PVOID)(ULONG_PTR)&g_CallbackEntryListHead.Blink, L"g_CallbackEntryListHead.Blink", NULL);
+    R0sRegisterVariable(sizeof(PVOID),  (PVOID)(ULONG_PTR)&g_CallbackEntryLock,           L"g_CallbackEntryLock",           NULL);
+    R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_ProcessNotifyHandle,      L"g_ProcessNotifyHandle",      NULL);
+    R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_ThreadNotifyHandle,       L"g_ThreadNotifyHandle",       NULL);
+    R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_ImageNotifyHandle,        L"g_ImageNotifyHandle",        NULL);
+    R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_ObRegistrationHandle,     L"g_ObRegistrationHandle",     NULL);
+    R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_RegCallbackHandle,        L"g_RegCallbackHandle",        NULL);
+    R0sRegisterVariable(sizeof(LARGE_INTEGER), (PVOID)(ULONG_PTR)&g_RegCookie,        L"g_RegCookie",                NULL);
+    R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_PowerStateCallbackHandle, L"g_PowerStateCallbackHandle", NULL);
+    R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_SystemTimeCallbackHandle, L"g_SystemTimeCallbackHandle", NULL);
+    R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_PnpRegistrationHandle,    L"g_PnpRegistrationHandle",    NULL);
+    R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_FilterHandle,             L"g_FilterHandle",             NULL);
+    R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_LogonSessionTerminated,   L"g_LogonSessionTerminated",   NULL);
+    R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_LastChanceShutdown,       L"g_LastChanceShutdown",       NULL);
+    R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_NmiCallbackHandle,        L"g_NmiCallbackHandle",        NULL);
+    R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_InterruptTimer,           L"g_InterruptTimer",           NULL);
+    R0sRegisterVariable(sizeof(PVOID), (PVOID)(ULONG_PTR)&g_InterruptDpc,             L"g_InterruptDpc",             NULL);
+    R0sRegisterVariable(sizeof(BOOLEAN), (PVOID)(ULONG_PTR)&g_InterruptTimerRunning,  L"g_InterruptTimerRunning",    NULL);
+    R0sRegisterVariable(sizeof(LONG), (PVOID)(ULONG_PTR)&g_InCallbackCount,L"g_InCallbackCount", NULL);
+    R0sRegisterVariable(sizeof(LONG), (PVOID)(ULONG_PTR)&g_ShuttingDown,L"g_ShuttingDown", NULL);
+    R0sRegisterVariable(sizeof(LONG), (PVOID)(ULONG_PTR)&g_InFileNotify,L"g_InFileNotify", NULL);
 
     if (g_DeviceObject != NULL) {
         __try {
@@ -996,6 +1216,898 @@ static VOID R0sFreeAuthList(VOID)
         __except (EXCEPTION_EXECUTE_HANDLER) { }
         __try { ExFreePoolWithTag(e, 'AUTH'); }
         __except (EXCEPTION_EXECUTE_HANDLER) { }
+    }
+}
+
+static VOID R0sNotifyFileOp(PFLT_CALLBACK_DATA Data, const WCHAR *opName)
+{
+    UINT64 args[8] = {0};
+    PFLT_FILE_NAME_INFORMATION fn = NULL;
+
+    if (InterlockedCompareExchange(&g_InFileNotify, 1, 0) != 0) return;
+
+    __try {
+        if (NT_SUCCESS(FltGetFileNameInformation(Data,
+                FLT_FILE_NAME_OPENED | FLT_FILE_NAME_QUERY_ALWAYS_ALLOW_CACHE_LOOKUP, &fn))) {
+            if (NT_SUCCESS(FltParseFileNameInformation(fn))) {
+                args[0] = (UINT64)(ULONG_PTR)fn->Name.Buffer;
+                args[1] = fn->Name.Length;
+                args[7] = (UINT64)(ULONG_PTR)&fn->Name;
+            }
+        }
+        args[2] = (UINT64)(ULONG_PTR)opName;
+        args[3] = (UINT64)(ULONG_PTR)PsGetCurrentProcessId();
+        args[4] = (UINT64)(ULONG_PTR)PsGetCurrentThreadId();
+        (void)R0sDispatchCallback(R0SCB_FILE, args, 8, NULL);
+    }
+    __finally {
+        if (fn) FltReleaseFileNameInformation(fn);
+        InterlockedExchange(&g_InFileNotify, 0);
+    }
+}
+
+FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreCreate(PFLT_CALLBACK_DATA Data,
+                                          PCFLT_RELATED_OBJECTS FltObjects,
+                                          PVOID *CompletionContext)
+{
+    UNREFERENCED_PARAMETER(FltObjects);
+    UNREFERENCED_PARAMETER(CompletionContext);
+    R0sNotifyFileOp(Data, L"Create");
+    return FLT_PREOP_SUCCESS_NO_CALLBACK;
+}
+
+FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreRead(PFLT_CALLBACK_DATA Data,
+                                        PCFLT_RELATED_OBJECTS FltObjects,
+                                        PVOID *CompletionContext)
+{
+    UNREFERENCED_PARAMETER(FltObjects);
+    UNREFERENCED_PARAMETER(CompletionContext);
+    R0sNotifyFileOp(Data, L"Read");
+    return FLT_PREOP_SUCCESS_NO_CALLBACK;
+}
+
+FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreWrite(PFLT_CALLBACK_DATA Data,
+                                         PCFLT_RELATED_OBJECTS FltObjects,
+                                         PVOID *CompletionContext)
+{
+    UNREFERENCED_PARAMETER(FltObjects);
+    UNREFERENCED_PARAMETER(CompletionContext);
+    R0sNotifyFileOp(Data, L"Write");
+    return FLT_PREOP_SUCCESS_NO_CALLBACK;
+}
+
+FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreSetInfo(PFLT_CALLBACK_DATA Data,
+                                           PCFLT_RELATED_OBJECTS FltObjects,
+                                           PVOID *CompletionContext)
+{
+    UNREFERENCED_PARAMETER(FltObjects);
+    UNREFERENCED_PARAMETER(CompletionContext);
+    R0sNotifyFileOp(Data, L"SetInfo");
+    return FLT_PREOP_SUCCESS_NO_CALLBACK;
+}
+
+FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreDirCtl(PFLT_CALLBACK_DATA Data,
+                                          PCFLT_RELATED_OBJECTS FltObjects,
+                                          PVOID *CompletionContext)
+{
+    UNREFERENCED_PARAMETER(FltObjects);
+    UNREFERENCED_PARAMETER(CompletionContext);
+    R0sNotifyFileOp(Data, L"DirCtl");
+    return FLT_PREOP_SUCCESS_NO_CALLBACK;
+}
+
+const FLT_OPERATION_REGISTRATION g_FltOps[] = {
+    { IRP_MJ_CREATE,            0, R0sFltPreCreate,  NULL },
+    { IRP_MJ_READ,              0, R0sFltPreRead,    NULL },
+    { IRP_MJ_WRITE,             0, R0sFltPreWrite,   NULL },
+    { IRP_MJ_SET_INFORMATION,   0, R0sFltPreSetInfo, NULL },
+    { IRP_MJ_DIRECTORY_CONTROL, 0, R0sFltPreDirCtl,  NULL },
+    { IRP_MJ_OPERATION_END }
+};
+
+NTSTATUS FLTAPI R0sFltUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
+{
+    UNREFERENCED_PARAMETER(Flags);
+    return STATUS_SUCCESS;
+}
+
+static VOID R0sProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO CreateInfo)
+{
+    UINT64 args[8] = {0};
+    args[0] = (UINT64)(ULONG_PTR)ProcessId;
+    if (CreateInfo) {
+        args[1] = (UINT64)(ULONG_PTR)CreateInfo->ParentProcessId;
+        if (CreateInfo->ImageFileName && CreateInfo->ImageFileName->Buffer)
+            args[7] = (UINT64)(ULONG_PTR)CreateInfo->ImageFileName;   
+        (void)R0sDispatchCallback(R0SCB_PROCESS_CREATE, args, 8, NULL);
+    } else {
+        (void)R0sDispatchCallback(R0SCB_PROCESS_TERMINATE, args, 2, NULL);
+    }
+    UNREFERENCED_PARAMETER(Process);
+}
+
+static VOID R0sImageNotify(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO ImageInfo)
+{
+    UINT64 args[8] = {0};
+    args[0] = (UINT64)(ULONG_PTR)ProcessId;
+    if (FullImageName && FullImageName->Buffer)
+        args[7] = (UINT64)(ULONG_PTR)FullImageName;                   
+    (void)R0sDispatchCallback(R0SCB_IMAGE_LOAD, args, 8, NULL);
+    UNREFERENCED_PARAMETER(ImageInfo);
+}
+
+static VOID R0sThreadNotify(HANDLE ProcessId, HANDLE ThreadId, BOOLEAN Create)
+{
+    UINT64 args[8] = {0};
+    args[0] = (UINT64)(ULONG_PTR)ProcessId;
+    args[1] = (UINT64)(ULONG_PTR)ThreadId;  
+    (void)R0sDispatchCallback(Create ? R0SCB_THREAD_CREATE : R0SCB_THREAD_TERMINATE, args, 2, NULL);
+
+}
+
+static OB_PREOP_CALLBACK_STATUS R0sObPreCallback(PVOID ctx, POB_PRE_OPERATION_INFORMATION opInfo)
+{
+    UINT64 args[8] = {0};
+    UINT64 newAccess = 0;
+    NTSTATUS st;
+    UNREFERENCED_PARAMETER(ctx);
+
+    if (opInfo->ObjectType != *PsProcessType && opInfo->ObjectType != *PsThreadType)
+        return OB_PREOP_SUCCESS;
+    if (opInfo->Operation != OB_OPERATION_HANDLE_CREATE &&
+        opInfo->Operation != OB_OPERATION_HANDLE_DUPLICATE)
+        return OB_PREOP_SUCCESS;
+
+    args[0] = (UINT64)(ULONG_PTR)PsGetCurrentProcessId();
+    args[1] = (UINT64)(ULONG_PTR)PsGetCurrentThreadId();
+    args[2] = (UINT64)(ULONG_PTR)opInfo->Object;
+    args[3] = (opInfo->ObjectType == *PsProcessType) ? 0 : 1;
+
+    st = R0sDispatchCallback(R0SCB_OBJECT_HANDLE, args, 4, &newAccess);
+    if (!NT_SUCCESS(st)) return OB_PREOP_SUCCESS;
+
+    if (newAccess) {
+        if (opInfo->Operation == OB_OPERATION_HANDLE_CREATE) {
+            opInfo->Parameters->CreateHandleInformation.DesiredAccess = (ACCESS_MASK)newAccess;
+        } else {
+            opInfo->Parameters->DuplicateHandleInformation.DesiredAccess = (ACCESS_MASK)newAccess;
+        }
+    }
+    return OB_PREOP_SUCCESS;
+}
+
+static NTSTATUS R0sInitCallback(ULONG Index)
+{
+    NTSTATUS st = STATUS_SUCCESS;
+    LARGE_INTEGER due;
+
+    if (Index >= R0SCB_IOCTL_BASE) return STATUS_INVALID_PARAMETER;
+    if ((g_SysCbActive >> Index) & 1U) return STATUS_SUCCESS;
+
+    if (g_CallbackAltitude < 300000 || g_CallbackAltitude > 400000) {
+        LARGE_INTEGER t; KeQuerySystemTime(&t);
+        g_CallbackAltitude = 300000 + (ULONG)(t.LowPart % 100000);
+    }
+
+    switch (Index) {
+    case R0SCB_PROCESS_CREATE:
+    case R0SCB_PROCESS_TERMINATE:
+        if (g_ProcessNotifyHandle) {
+            st = STATUS_SUCCESS; 
+        } else {
+            st = PsSetCreateProcessNotifyRoutineEx(R0sProcessNotify, FALSE);
+            if (NT_SUCCESS(st)) g_ProcessNotifyHandle = (PVOID)R0sProcessNotify;
+        }
+        if (NT_SUCCESS(st)) {
+            g_SysCbActive |= (UINT16)(1U << R0SCB_PROCESS_CREATE);
+            g_SysCbActive |= (UINT16)(1U << R0SCB_PROCESS_TERMINATE);
+        }
+        break;
+
+    case R0SCB_THREAD_CREATE:
+    case R0SCB_THREAD_TERMINATE:
+        if (g_ThreadNotifyHandle) {
+            st = STATUS_SUCCESS; 
+        } else {
+            st = PsSetCreateThreadNotifyRoutine(R0sThreadNotify);
+            if (NT_SUCCESS(st)) g_ThreadNotifyHandle = (PVOID)R0sThreadNotify;
+        }
+        if (NT_SUCCESS(st)) {
+            g_SysCbActive |= (UINT16)(1U << R0SCB_THREAD_CREATE);
+            g_SysCbActive |= (UINT16)(1U << R0SCB_THREAD_TERMINATE);
+        }
+        break;
+
+    case R0SCB_IMAGE_LOAD:
+        st = PsSetLoadImageNotifyRoutine(R0sImageNotify);
+        if (NT_SUCCESS(st)) { g_ImageNotifyHandle = (PVOID)R0sImageNotify; g_SysCbActive |= (UINT16)(1U << Index); }
+        break;
+
+    case R0SCB_OBJECT_HANDLE: {
+        OB_OPERATION_REGISTRATION ops[2] = {0};
+        OB_CALLBACK_REGISTRATION cb = {0};
+        UNICODE_STRING alt;
+        WCHAR altbuf[32];
+        RtlStringCchPrintfW(altbuf, RTL_NUMBER_OF(altbuf), L"%u.1234", g_CallbackAltitude);
+        RtlInitUnicodeString(&alt, altbuf);
+
+        ops[0].ObjectType = PsProcessType;
+        ops[0].Operations = OB_OPERATION_HANDLE_CREATE | OB_OPERATION_HANDLE_DUPLICATE;
+        ops[0].PreOperation = R0sObPreCallback;
+
+        ops[1].ObjectType = PsThreadType;
+        ops[1].Operations = OB_OPERATION_HANDLE_CREATE | OB_OPERATION_HANDLE_DUPLICATE;
+        ops[1].PreOperation = R0sObPreCallback;
+
+        cb.Version = OB_FLT_REGISTRATION_VERSION;
+        cb.OperationRegistrationCount = 2;
+        cb.OperationRegistration = ops;
+        cb.Altitude = alt;
+
+        st = ObRegisterCallbacks(&cb, &g_ObRegistrationHandle);
+        if (NT_SUCCESS(st)) g_SysCbActive |= (UINT16)(1U << Index);
+        break;
+    }
+
+    case R0SCB_REGISTRY: {
+        UNICODE_STRING alt;
+        WCHAR altbuf[32];
+        RtlStringCchPrintfW(altbuf, RTL_NUMBER_OF(altbuf), L"%u.1235", g_CallbackAltitude);
+        RtlInitUnicodeString(&alt, altbuf);
+
+        st = CmRegisterCallbackEx((PEX_CALLBACK_FUNCTION)R0sRegistryCallback,
+                                  &alt, g_DriverObject, NULL, &g_RegCookie, NULL);
+        if (NT_SUCCESS(st)) { g_RegCallbackHandle = (PVOID)R0sRegistryCallback; g_SysCbActive |= (UINT16)(1U << Index); }
+        break;
+    }
+
+    case R0SCB_FILE: {
+        static FLT_REGISTRATION reg = {
+            sizeof(FLT_REGISTRATION), FLT_REGISTRATION_VERSION, 0, NULL,
+            NULL, R0sFltUnload, NULL, NULL, NULL, NULL, NULL
+        };
+        extern const FLT_OPERATION_REGISTRATION g_FltOps[];
+        reg.OperationRegistration = g_FltOps;
+
+        st = FltRegisterFilter(g_DriverObject, &reg, &g_FilterHandle);
+        if (NT_SUCCESS(st)) {
+            st = FltStartFiltering(g_FilterHandle);
+            if (!NT_SUCCESS(st)) { FltUnregisterFilter(g_FilterHandle); g_FilterHandle = NULL; }
+            else g_SysCbActive |= (UINT16)(1U << Index);
+        }
+        break;
+    }
+
+    case R0SCB_POWER_STATE: {
+        UNICODE_STRING s; 
+        OBJECT_ATTRIBUTES oa; 
+        PCALLBACK_OBJECT callbackObj = NULL;
+
+        RtlInitUnicodeString(&s, L"\\Callback\\PowerState");
+        InitializeObjectAttributes(&oa, &s, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+
+        st = ExCreateCallback(&callbackObj, &oa, FALSE, TRUE);
+        if (NT_SUCCESS(st) && callbackObj != NULL) {
+            g_PowerStateCallbackHandle = ExRegisterCallback(callbackObj, R0sPowerStateCallback, NULL);
+            ObDereferenceObject(callbackObj);
+            if (g_PowerStateCallbackHandle) { 
+                g_SysCbActive |= (UINT16)(1U << Index); 
+                st = STATUS_SUCCESS; 
+            } else {
+                st = STATUS_UNSUCCESSFUL;
+            }
+        }
+        break;
+    }
+
+    case R0SCB_SYSTEM_TIME: {
+        UNICODE_STRING s; 
+        OBJECT_ATTRIBUTES oa; 
+        PCALLBACK_OBJECT callbackObj = NULL;
+
+        RtlInitUnicodeString(&s, L"\\Callback\\SetSystemTime");
+        InitializeObjectAttributes(&oa, &s, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+
+        st = ExCreateCallback(&callbackObj, &oa, FALSE, TRUE);
+        if (NT_SUCCESS(st) && callbackObj != NULL) {
+            g_SystemTimeCallbackHandle = ExRegisterCallback(callbackObj, R0sSystemTimeCallback, NULL);
+            ObDereferenceObject(callbackObj);
+            if (g_SystemTimeCallbackHandle) { 
+                g_SysCbActive |= (UINT16)(1U << Index); 
+                st = STATUS_SUCCESS; 
+            } else {
+                st = STATUS_UNSUCCESSFUL;
+            }
+        }
+        break;
+    }
+
+    case R0SCB_PNP:
+        st = IoRegisterPlugPlayNotification(
+                EventCategoryDeviceInterfaceChange,
+                PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES,
+                (PVOID)&g_GuidDevInterfaceDisk,
+                g_DriverObject, R0sPnpCallback, NULL, &g_PnpRegistrationHandle);
+        if (NT_SUCCESS(st)) g_SysCbActive |= (UINT16)(1U << Index);
+        break;
+
+    case R0SCB_DEBUG_PRINT: {
+        st = DbgSetDebugPrintCallback((PDEBUG_PRINT_CALLBACK)R0sDebugPrintCallback, TRUE);
+        if (NT_SUCCESS(st)) {
+            g_SysCbActive |= (UINT16)(1U << Index);
+        }
+        if (g_DebugMode & (1ULL << (48 + Index)))
+            DbgPrint("R0S: cb %lu DbgSetDebugPrintCallback st=0x%08X\n", Index, st);
+        break;
+    }
+
+    case R0SCB_INTERRUPT:
+        if (!g_InterruptDpc)   g_InterruptDpc   = ExAllocatePoolWithTag(NonPagedPoolNx, sizeof(KDPC),   'CBDP');
+        if (!g_InterruptTimer) g_InterruptTimer = ExAllocatePoolWithTag(NonPagedPoolNx, sizeof(KTIMER), 'CBTM');
+        if (g_InterruptDpc && g_InterruptTimer) {
+            KeInitializeDpc(g_InterruptDpc, R0sInterruptDpc, NULL);
+            KeInitializeTimer(g_InterruptTimer);
+            due.QuadPart = -5LL * 10 * 1000 * 1000;
+            KeSetTimer(g_InterruptTimer, due, g_InterruptDpc);
+            g_InterruptTimerRunning = TRUE;
+            g_SysCbActive |= (UINT16)(1U << Index);
+        } else st = STATUS_INSUFFICIENT_RESOURCES;
+        break;
+
+    case R0SCB_LOGON_SESSION_TERM:
+        st = SeRegisterLogonSessionTerminatedRoutine(
+                (PSE_LOGON_SESSION_TERMINATED_ROUTINE)R0sLogonSessionTerminated);
+        if (NT_SUCCESS(st)) { g_LogonSessionTerminated = (PVOID)R0sLogonSessionTerminated; g_SysCbActive |= (UINT16)(1U << Index); }
+        break;
+
+    case R0SCB_LAST_CHANCE_SHUTDOWN:
+        st = IoRegisterLastChanceShutdownNotification(g_DeviceObject);
+        if (NT_SUCCESS(st)) { g_LastChanceShutdown = (PVOID)g_DeviceObject; g_SysCbActive |= (UINT16)(1U << Index); }
+        break;
+
+    case R0SCB_NMI:
+        g_NmiCallbackHandle = KeRegisterNmiCallback((PNMI_CALLBACK)R0sNmiCallback, NULL);
+        if (g_NmiCallbackHandle) { g_SysCbActive |= (UINT16)(1U << Index); st = STATUS_SUCCESS; }
+        else st = STATUS_UNSUCCESSFUL;
+        break;
+
+    default:
+        st = STATUS_INVALID_PARAMETER;
+    }
+
+    return st;
+}
+
+static VOID R0sUninitCallback(ULONG Index)
+{
+    if (Index >= R0SCB_IOCTL_BASE) return;
+    if (!((g_SysCbActive >> Index) & 1U)) return;
+
+    switch (Index) {
+    case R0SCB_PROCESS_CREATE:
+    case R0SCB_PROCESS_TERMINATE:
+        if (g_ProcessNotifyHandle) { 
+            PsSetCreateProcessNotifyRoutineEx(R0sProcessNotify, TRUE); 
+            g_ProcessNotifyHandle = NULL; 
+        }
+
+        g_SysCbActive &= (UINT16)(~(1U << R0SCB_PROCESS_CREATE) & 0xFFFF);
+        g_SysCbActive &= (UINT16)(~(1U << R0SCB_PROCESS_TERMINATE) & 0xFFFF);
+        return;
+
+    case R0SCB_THREAD_CREATE:
+    case R0SCB_THREAD_TERMINATE:
+        if (g_ThreadNotifyHandle) { 
+            PsRemoveCreateThreadNotifyRoutine(R0sThreadNotify); 
+            g_ThreadNotifyHandle = NULL; 
+        }
+        g_SysCbActive &= (UINT16)(~(1U << R0SCB_THREAD_CREATE) & 0xFFFF);
+        g_SysCbActive &= (UINT16)(~(1U << R0SCB_THREAD_TERMINATE) & 0xFFFF);
+        return;
+
+    case R0SCB_IMAGE_LOAD:
+        if (g_ImageNotifyHandle) { PsRemoveLoadImageNotifyRoutine(R0sImageNotify); g_ImageNotifyHandle = NULL; }
+        break;
+
+    case R0SCB_OBJECT_HANDLE:
+        if (g_ObRegistrationHandle) { ObUnRegisterCallbacks(g_ObRegistrationHandle); g_ObRegistrationHandle = NULL; }
+        break;
+
+    case R0SCB_REGISTRY:
+        if (g_RegCallbackHandle) { CmUnRegisterCallback(g_RegCookie); g_RegCallbackHandle = NULL; }
+        break;
+
+    case R0SCB_FILE:
+        if (g_FilterHandle) { FltUnregisterFilter(g_FilterHandle); g_FilterHandle = NULL; }
+        break;
+
+    case R0SCB_POWER_STATE:
+        if (g_PowerStateCallbackHandle) { ExUnregisterCallback(g_PowerStateCallbackHandle); g_PowerStateCallbackHandle = NULL; }
+        break;
+
+    case R0SCB_SYSTEM_TIME:
+        if (g_SystemTimeCallbackHandle) { ExUnregisterCallback(g_SystemTimeCallbackHandle); g_SystemTimeCallbackHandle = NULL; }
+        break;
+
+    case R0SCB_PNP:
+        if (g_PnpRegistrationHandle) { IoUnregisterPlugPlayNotification(g_PnpRegistrationHandle); g_PnpRegistrationHandle = NULL; }
+        break;
+
+    case R0SCB_DEBUG_PRINT: {
+        DbgSetDebugPrintCallback((PDEBUG_PRINT_CALLBACK)R0sDebugPrintCallback, FALSE);
+        break;
+    }
+
+    case R0SCB_INTERRUPT:
+
+        g_InterruptTimerRunning = FALSE;
+        KeMemoryBarrier();
+
+        if (g_InterruptTimer) KeCancelTimer(g_InterruptTimer);
+        KeFlushQueuedDpcs();
+        if (g_InterruptTimer) KeCancelTimer(g_InterruptTimer);
+        KeFlushQueuedDpcs();
+
+        if (g_InterruptTimer) { ExFreePoolWithTag(g_InterruptTimer, 'CBTM'); g_InterruptTimer = NULL; }
+        if (g_InterruptDpc)   { ExFreePoolWithTag(g_InterruptDpc,   'CBDP'); g_InterruptDpc   = NULL; }
+        break;
+
+    case R0SCB_LOGON_SESSION_TERM:
+        if (g_LogonSessionTerminated) {
+            SeUnregisterLogonSessionTerminatedRoutine(
+                (PSE_LOGON_SESSION_TERMINATED_ROUTINE)R0sLogonSessionTerminated);
+            g_LogonSessionTerminated = NULL;
+        }
+        break;
+
+    case R0SCB_LAST_CHANCE_SHUTDOWN:
+        if (g_LastChanceShutdown) {
+            IoUnregisterShutdownNotification(g_DeviceObject);
+            g_LastChanceShutdown = NULL;
+        }
+        break;
+
+    case R0SCB_NMI:
+        if (g_NmiCallbackHandle) { KeDeregisterNmiCallback(g_NmiCallbackHandle); g_NmiCallbackHandle = NULL; }
+        break;
+    }
+    g_SysCbActive &= (UINT16)~(1U << Index);
+}
+
+VOID R0sUninitAllCallbacks(VOID)
+{
+    ULONG i;
+    for (i = 0; i < 16; i++) R0sUninitCallback(i);
+}
+
+static ULONG R0sNextPriority(VOID)
+{
+    ULONG maxP = 0;
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&g_CallbackEntryLock, &oldIrql);
+    for (PLIST_ENTRY p = g_CallbackEntryListHead.Flink;
+         p != &g_CallbackEntryListHead; p = p->Flink) {
+        PR0S_CALLBACK_ENTRY e = CONTAINING_RECORD(p, R0S_CALLBACK_ENTRY, ListEntry);
+        if (e->Priority >= maxP) maxP = e->Priority + 1;
+    }
+    KeReleaseSpinLock(&g_CallbackEntryLock, oldIrql);
+    return maxP;
+}
+
+static VOID R0sQueueEvent(PR0S_CALLBACK_ENTRY e, PR0S_CALLBACK_CONTEXT ctx)
+{
+    KIRQL          oldIrql;
+    PR0S_EVENT_NODE node;
+
+    InterlockedIncrement((volatile LONG*)&e->TotalEventCount);
+
+    KeAcquireSpinLock(&e->QueueLock, &oldIrql);
+
+    if (e->EventCount >= 1024) {
+        PLIST_ENTRY oldest = RemoveHeadList(&e->EventQueueHead);
+        PR0S_EVENT_NODE old = CONTAINING_RECORD(oldest, R0S_EVENT_NODE, ListEntry);
+        ExFreePoolWithTag(old, 'EVNT');
+        e->EventCount--;
+    }
+
+    node = (PR0S_EVENT_NODE)ExAllocatePoolWithTag(
+                NonPagedPool, sizeof(R0S_EVENT_NODE), 'EVNT');
+    if (node) {
+        RtlZeroMemory(node, sizeof(*node));
+        RtlCopyMemory(&node->ctx, ctx, sizeof(R0S_CALLBACK_CONTEXT));
+        InsertTailList(&e->EventQueueHead, &node->ListEntry);
+        e->EventCount++;
+    }
+
+    KeReleaseSpinLock(&e->QueueLock, oldIrql);
+
+    if (e->NotifyEvent)
+        KeSetEvent(e->NotifyEvent, IO_NO_INCREMENT, FALSE);
+
+    InterlockedIncrement((volatile LONG*)&e->CallCount);
+}
+
+static VOID R0sFreeCallbackEntry(PR0S_CALLBACK_ENTRY e)
+{
+    if (!e) return;
+    if (e->QueueInitialized) {
+        KIRQL oldIrql;
+        KeAcquireSpinLock(&e->QueueLock, &oldIrql);
+        while (!IsListEmpty(&e->EventQueueHead)) {
+            PLIST_ENTRY p = RemoveHeadList(&e->EventQueueHead);
+            PR0S_EVENT_NODE n = CONTAINING_RECORD(p, R0S_EVENT_NODE, ListEntry);
+            ExFreePoolWithTag(n, 'EVNT');
+        }
+        e->EventCount = 0;
+        KeReleaseSpinLock(&e->QueueLock, oldIrql);
+    }
+    if (e->Thread)       ObDereferenceObject(e->Thread);
+    if (e->OwnerProcess) ObDereferenceObject(e->OwnerProcess);
+    if (e->NotifyEvent)  ObDereferenceObject(e->NotifyEvent);
+    if (e->SyncEvent)    ObDereferenceObject(e->SyncEvent);
+    ExFreePoolWithTag(e, 'CBLT');
+}
+
+static NTSTATUS R0sRegistryCallback(PVOID ctx, PVOID Argument1, PVOID Argument2)
+{
+    UINT64 args[8] = {0};
+    UNREFERENCED_PARAMETER(ctx);
+    args[0] = (UINT64)(ULONG_PTR)Argument1;
+    args[1] = (UINT64)(ULONG_PTR)Argument2;
+    args[2] = (UINT64)(ULONG_PTR)PsGetCurrentProcessId();
+    args[3] = (UINT64)(ULONG_PTR)PsGetCurrentThreadId();
+    (void)R0sDispatchCallback(R0SCB_REGISTRY, args, 4, NULL);
+    return STATUS_SUCCESS;
+}
+
+static VOID R0sPowerStateCallback(PVOID ctx, PVOID Argument1, PVOID Argument2)
+{
+    UINT64 args[8] = {0};
+    args[0] = (UINT64)(ULONG_PTR)Argument1;
+    args[1] = (UINT64)(ULONG_PTR)Argument2;
+    (void)R0sDispatchCallback(R0SCB_POWER_STATE, args, 2, NULL);
+    UNREFERENCED_PARAMETER(ctx);
+}
+
+static VOID R0sSystemTimeCallback(PVOID ctx, PVOID Argument1, PVOID Argument2)
+{
+    UINT64 args[8] = {0};
+    args[0] = (UINT64)(ULONG_PTR)Argument1;
+    args[1] = (UINT64)(ULONG_PTR)Argument2;
+    (void)R0sDispatchCallback(R0SCB_SYSTEM_TIME, args, 2, NULL);
+    UNREFERENCED_PARAMETER(ctx);
+}
+
+static NTSTATUS R0sPnpCallback(PVOID NotificationStructure, PVOID Context)
+{
+    UINT64 args[8] = {0};
+    args[0] = (UINT64)(ULONG_PTR)NotificationStructure;
+    (void)R0sDispatchCallback(R0SCB_PNP, args, 1, NULL);
+    UNREFERENCED_PARAMETER(Context);
+    return STATUS_SUCCESS;
+}
+
+static VOID R0sDebugPrintCallback(PSTRING Output, ULONG ComponentId, ULONG Level)
+{
+    UINT64          args[8] = {0};
+    WCHAR           textBuf[240];
+    UNICODE_STRING  uni;
+    ULONG           copy, i;
+
+    if (!Output || !Output->Buffer || Output->Length == 0) return;
+
+    copy = Output->Length;
+    if (copy >= (sizeof(textBuf) / sizeof(WCHAR)))
+        copy = (sizeof(textBuf) / sizeof(WCHAR)) - 1;
+    for (i = 0; i < copy; i++)
+        textBuf[i] = (WCHAR)(UCHAR)Output->Buffer[i];
+    textBuf[copy] = L'\0';
+
+    uni.Length        = (USHORT)(copy * sizeof(WCHAR));
+    uni.MaximumLength = (USHORT)sizeof(textBuf);
+    uni.Buffer        = textBuf;
+
+    args[0] = (UINT64)(ULONG_PTR)Output->Buffer;
+    args[1] = Output->Length;
+    args[2] = ComponentId;
+    args[3] = Level;
+    args[4] = (UINT64)(ULONG_PTR)PsGetCurrentProcessId();
+    args[5] = (UINT64)(ULONG_PTR)PsGetCurrentThreadId();
+    args[7] = (UINT64)(ULONG_PTR)&uni;
+
+    (void)R0sDispatchCallback(R0SCB_DEBUG_PRINT, args, 8, NULL);
+}
+
+static VOID R0sInterruptDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
+{
+    UINT64 args[8] = {0};
+    UNREFERENCED_PARAMETER(Dpc); UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(Arg1); UNREFERENCED_PARAMETER(Arg2);
+    (void)R0sDispatchCallback(R0SCB_INTERRUPT, args, 0, NULL);
+    if (g_InterruptTimerRunning && g_InterruptTimer) {
+        LARGE_INTEGER due; due.QuadPart = -5LL * 10 * 1000 * 1000;
+        KeSetTimer(g_InterruptTimer, due, g_InterruptDpc);
+    }
+}
+
+static VOID R0sLogonSessionTerminated(PVOID Arg)
+{
+    UINT64 args[8] = {0};
+    args[0] = (UINT64)(ULONG_PTR)Arg;
+    (void)R0sDispatchCallback(R0SCB_LOGON_SESSION_TERM, args, 1, NULL);
+}
+
+static VOID R0sLastChanceShutdown(PDEVICE_OBJECT DevObj)
+{
+    UINT64 args[8] = {0};
+    args[0] = (UINT64)(ULONG_PTR)DevObj;
+    (void)R0sDispatchCallback(R0SCB_LAST_CHANCE_SHUTDOWN, args, 1, NULL);
+}
+
+static BOOLEAN R0sNmiCallback(PVOID Context, BOOLEAN Handled)
+{
+    UINT64 args[8] = {0};
+    UINT64 newAccess = 0;
+    NTSTATUS st;
+    UNREFERENCED_PARAMETER(Context);
+    args[0] = (UINT64)Handled;
+    st = R0sDispatchCallback(R0SCB_NMI, args, 1, &newAccess);
+    if (NT_SUCCESS(st) && newAccess == 1) return TRUE;
+    return FALSE;
+}
+
+static VOID R0sSortSnapshotByPriority(PR0S_CALLBACK_ENTRY *snap, ULONG n)
+{
+    for (ULONG i = 0; i + 1 < n; i++) {
+        for (ULONG j = i + 1; j < n; j++) {
+            if (snap[j]->Priority < snap[i]->Priority) {
+                PR0S_CALLBACK_ENTRY t = snap[i];
+                snap[i] = snap[j];
+                snap[j] = t;
+            }
+        }
+    }
+}
+
+NTSTATUS R0sDispatchCallback(ULONG Index, UINT64 *Args, ULONG ArgCount,
+                             UINT64 *NewAccessMask)
+{
+    NTSTATUS finalStatus = STATUS_SUCCESS;
+    PR0S_CALLBACK_ENTRY snap[R0S_CB_SNAPSHOT_MAX];
+    ULONG snapCount = 0;
+    KIRQL oldIrql;
+    PLIST_ENTRY p;
+    LARGE_INTEGER timeout;
+    BOOLEAN counted = FALSE;
+
+    __try {
+        if (Index >= R0SCB_TOTAL_COUNT) return STATUS_INVALID_PARAMETER;
+        if (g_ShuttingDown) return STATUS_DELETE_PENDING;
+        if (!(g_R0CallbackControl & (1ULL << Index))) return STATUS_SUCCESS;
+
+        InterlockedIncrement(&g_InCallbackCount);
+        counted = TRUE;
+
+        if (Index < R0SCB_IOCTL_BASE) {
+            KeAcquireSpinLock(&g_CallbackEntryLock, &oldIrql);
+            p = g_CallbackEntryListHead.Flink;
+            while (p != &g_CallbackEntryListHead && snapCount < R0S_CB_SNAPSHOT_MAX) {
+                PR0S_CALLBACK_ENTRY e = CONTAINING_RECORD(p, R0S_CALLBACK_ENTRY, ListEntry);
+                if (!e->Removing &&
+                    (e->CallbackMask & (1ULL << Index)) &&
+                    e->NotifyEvent) {
+                    InterlockedIncrement(&e->RefCount);
+                    snap[snapCount++] = e;
+                }
+                p = p->Flink;
+            }
+            KeReleaseSpinLock(&g_CallbackEntryLock, oldIrql);
+
+            R0sSortSnapshotByPriority(snap, snapCount);   
+
+            for (ULONG i = 0; i < snapCount; i++) {
+                PR0S_CALLBACK_ENTRY e = snap[i];
+                R0S_CALLBACK_CONTEXT tmp;
+
+                RtlZeroMemory(&tmp, sizeof(tmp));
+                tmp.CallbackIndex = Index;
+                tmp.Status        = STATUS_SUCCESS;
+                tmp.NotifyOnly    = 1;   
+
+                switch (Index) {
+                case R0SCB_PROCESS_CREATE:
+                    if (ArgCount > 0) tmp.Args[0] = Args[0];
+                    if (ArgCount > 1) tmp.Args[1] = Args[1];
+                    break;
+                case R0SCB_PROCESS_TERMINATE:
+                    if (ArgCount > 0) tmp.Args[0] = Args[0];
+                    break;
+                case R0SCB_THREAD_CREATE:
+                case R0SCB_THREAD_TERMINATE:
+                    if (ArgCount > 0) tmp.Args[0] = Args[0];
+                    if (ArgCount > 1) tmp.Args[1] = Args[1];
+                    break;
+                case R0SCB_IMAGE_LOAD:
+                    if (ArgCount > 0) tmp.Args[0] = Args[0];
+                    break;
+                case R0SCB_OBJECT_HANDLE:
+                    if (ArgCount > 0) tmp.Args[0] = Args[0];
+                    if (ArgCount > 1) tmp.Args[1] = Args[1];
+                    if (ArgCount > 3) tmp.Args[3] = Args[3];
+                    break;
+                case R0SCB_REGISTRY:
+                    if (ArgCount > 0) tmp.Args[0] = Args[0];
+                    if (ArgCount > 2) tmp.Args[2] = Args[2];
+                    if (ArgCount > 3) tmp.Args[3] = Args[3];
+                    break;
+                case R0SCB_FILE:
+                    if (ArgCount > 1) tmp.Args[1] = Args[1];
+                    if (ArgCount > 3) tmp.Args[3] = Args[3];
+                    if (ArgCount > 4) tmp.Args[4] = Args[4];
+                    break;
+                case R0SCB_POWER_STATE:
+                    if (ArgCount > 0) tmp.Args[0] = Args[0];
+                    break;
+                case R0SCB_DEBUG_PRINT:
+                    if (ArgCount > 1) tmp.Args[1] = Args[1];
+                    if (ArgCount > 2) tmp.Args[2] = Args[2];
+                    if (ArgCount > 3) tmp.Args[3] = Args[3];
+                    if (ArgCount > 4) tmp.Args[4] = Args[4];
+                    if (ArgCount > 5) tmp.Args[5] = Args[5];
+                    break;
+                case R0SCB_NMI:
+                    if (ArgCount > 0) tmp.Args[0] = Args[0];
+                    break;
+                default:
+                    break;
+                }
+
+                if (ArgCount > 7 && Args[7] != 0) {
+                    __try {
+                        PUNICODE_STRING pus = (PUNICODE_STRING)(ULONG_PTR)Args[7];
+                        if (pus->Buffer && pus->Length > 0 &&
+                            pus->Length < sizeof(tmp.Text)) {
+                            RtlCopyMemory(tmp.Text, pus->Buffer, pus->Length);
+                            tmp.Text[pus->Length / sizeof(WCHAR)] = L'\0';
+                        }
+                    } __except (EXCEPTION_EXECUTE_HANDLER) { }
+                }
+
+                R0sQueueEvent(e, &tmp);
+
+                if (InterlockedDecrement(&e->RefCount) == 0 && e->Removing) {
+                    R0sFreeCallbackEntry(e);
+                }
+            }
+
+            InterlockedDecrement(&g_InCallbackCount);
+            counted = FALSE;
+            return STATUS_SUCCESS;
+        }
+
+        KeAcquireSpinLock(&g_CallbackEntryLock, &oldIrql);
+        p = g_CallbackEntryListHead.Flink;
+        while (p != &g_CallbackEntryListHead && snapCount < R0S_CB_SNAPSHOT_MAX) {
+            PR0S_CALLBACK_ENTRY e = CONTAINING_RECORD(p, R0S_CALLBACK_ENTRY, ListEntry);
+            if (!e->Removing &&
+                (e->CallbackMask & (1ULL << Index)) &&
+                e->NotifyEvent && e->SyncEvent && e->Thread &&
+                e->OwnerProcess) {
+                InterlockedIncrement(&e->RefCount);
+                snap[snapCount++] = e;
+            }
+            p = p->Flink;
+        }
+        KeReleaseSpinLock(&g_CallbackEntryLock, oldIrql);
+
+        R0sSortSnapshotByPriority(snap, snapCount);   
+
+        BOOLEAN decided = FALSE;   
+
+        for (ULONG i = 0; i < snapCount; i++) {
+            PR0S_CALLBACK_ENTRY e = snap[i];
+            KAPC_STATE apc;
+            BOOLEAN    attached   = FALSE;
+            BOOLEAN    skip       = FALSE;
+            BOOLEAN    notifyOnly = decided;
+
+            if (g_ShuttingDown ||
+                PsGetProcessExitStatus(e->OwnerProcess) != STATUS_PENDING) {
+                skip = TRUE;
+            }
+
+            if (!skip && PsGetCurrentProcess() != e->OwnerProcess) {
+                __try {
+                    KeStackAttachProcess(e->OwnerProcess, &apc);
+                    attached = TRUE;
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                    attached = FALSE;
+                    skip     = TRUE;
+                }
+            }
+
+            if (!skip) {
+                __try {
+                    if (!g_ShuttingDown && e->SharedBuffer &&
+                        e->SharedBufferSize >= sizeof(R0S_CALLBACK_CONTEXT)) {
+                        PR0S_CALLBACK_CONTEXT ctx = e->SharedBuffer;
+
+                        ProbeForWrite(ctx, sizeof(R0S_CALLBACK_CONTEXT), 1);
+                        ctx->CallbackIndex = Index;
+                        ctx->Status        = STATUS_SUCCESS;
+                        ctx->HasNewAccess  = 0;
+                        ctx->NotifyOnly    = notifyOnly ? 1 : 0;
+                        RtlZeroMemory(ctx->Args, sizeof(ctx->Args));
+
+                        for (ULONG k = 0; k < ArgCount && k < 8; k++)
+                            ctx->Args[k] = Args[k];
+
+                        if (!notifyOnly) {
+                            KeResetEvent(e->SyncEvent);
+                        }
+                        KeSetEvent(e->NotifyEvent, IO_NO_INCREMENT, FALSE);
+
+                        if (!notifyOnly) {
+                            ULONG timeoutUs = g_CallbackTimeoutUs;
+                            if (timeoutUs == 0)      timeoutUs = 10000;
+                            if (timeoutUs > 5000000) timeoutUs = 5000000;
+                            timeout.QuadPart = -(LONGLONG)timeoutUs * 10;
+
+                            NTSTATUS ws = KeWaitForSingleObject(e->SyncEvent, Executive,
+                                                                KernelMode, FALSE, &timeout);
+                            if (ws == STATUS_TIMEOUT) {
+                                e->LastResult = STATUS_TIMEOUT;
+                                if (g_DebugMode & (1ULL << Index))
+                                    DbgPrint("R0S: cb %lu prio=%lu timeout -> 询问下一个\n",
+                                             Index, e->Priority);
+                            } else {
+                                ProbeForRead(ctx, sizeof(R0S_CALLBACK_CONTEXT), 1);
+                                NTSTATUS us = (NTSTATUS)ctx->Status;
+                                if (ctx->HasNewAccess && NewAccessMask)
+                                    *NewAccessMask = ctx->NewAccessMask;
+
+                                e->LastResult = us;
+                                decided = TRUE;           
+
+                                if (us != STATUS_SUCCESS) {
+                                    finalStatus = us;
+                                    if (g_DebugMode & (1ULL << Index))
+                                        DbgPrint("R0S: cb %lu prio=%lu 裁决=0x%08X (后续仅通知)\n",
+                                                 Index, e->Priority, (ULONG)us);
+                                } else {
+                                    if (g_DebugMode & (1ULL << Index))
+                                        DbgPrint("R0S: cb %lu prio=%lu 裁决=SUCCESS (后续仅通知)\n",
+                                                 Index, e->Priority);
+                                }
+                            }
+                        }
+                        InterlockedIncrement((volatile LONG*)&e->CallCount);
+                    }
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                    if (g_DebugMode & (1ULL << Index))
+                        DbgPrint("R0S: cb %lu dispatch SEH 0x%08X\n",
+                                 Index, GetExceptionCode());
+                }
+            }
+
+            if (attached) {
+                KeUnstackDetachProcess(&apc);
+            }
+
+            if (InterlockedDecrement(&e->RefCount) == 0 && e->Removing) {
+                R0sFreeCallbackEntry(e);
+            }
+        }
+
+        InterlockedDecrement(&g_InCallbackCount);
+        counted = FALSE;
+        return finalStatus;
+
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (counted) {
+            InterlockedDecrement(&g_InCallbackCount);
+        }
+        return STATUS_UNSUCCESSFUL;
     }
 }
 
@@ -1721,32 +2833,23 @@ NTSTATUS InitDynamicOffsets(VOID)
     NTSTATUS status = STATUS_SUCCESS;
 
     __try {
-        UNICODE_STRING us;
-        PVOID pExGetPrevMode;
-        PVOID pPsGetPid;
         ULONG offset;
         PEPROCESS pSystem = PsInitialSystemProcess;
 
-        RtlInitUnicodeString(&us, L"PsGetProcessId");
-        pPsGetPid = MmGetSystemRoutineAddress(&us);
-        if (!pPsGetPid) { status = STATUS_NOT_FOUND; __leave; }
-
         {
             UCHAR patternPsGetPid[] = {0x48, 0x8B, 0x81};
-            if (!FindPatternOffset(pPsGetPid, 0x200, patternPsGetPid, sizeof(patternPsGetPid), &offset)) {
+            if (!FindPatternOffset((PVOID)PsGetProcessId, 0x200,
+                                   patternPsGetPid, sizeof(patternPsGetPid), &offset)) {
                 status = STATUS_NOT_FOUND;
                 __leave;
             }
             g_ActiveProcessLinksOffset = offset + 0x08;
         }
 
-        RtlInitUnicodeString(&us, L"ExGetPreviousMode");
-        pExGetPrevMode = MmGetSystemRoutineAddress(&us);
-        if (!pExGetPrevMode) { status = STATUS_NOT_FOUND; __leave; }
-
         {
             UCHAR patternExGetPrevMode[] = {0x0F, 0xB6, 0x80};
-            if (!FindPatternOffset(pExGetPrevMode, 0x200, patternExGetPrevMode, sizeof(patternExGetPrevMode), &offset)) {
+            if (!FindPatternOffset((PVOID)ExGetPreviousMode, 0x200,
+                                   patternExGetPrevMode, sizeof(patternExGetPrevMode), &offset)) {
                 status = STATUS_NOT_FOUND;
                 __leave;
             }
@@ -2246,7 +3349,6 @@ NTSTATUS R0SimulateKernelProcessHiding(PVOID InputBuffer, ULONG InputSize,
                         pPrev = (PLIST_ENTRY)pLink->Blink;
                         pNext = (PLIST_ENTRY)pLink->Flink;
 
-                        
                         pEntry->OriginalBlink = pPrev;
                         pEntry->OriginalFlink = pNext;
 
@@ -2325,8 +3427,6 @@ NTSTATUS R0SimulateKernelProcessHiding(PVOID InputBuffer, ULONG InputSize,
                 if (pProc != NULL) {
                     pLink = (PLIST_ENTRY)((PCHAR)pProc + g_ActiveProcessLinksOffset);
 
-                    
-
                     if (origPrev != NULL && origNext != NULL) {
                         __try {
                             if (origPrev->Flink == origNext &&
@@ -2340,12 +3440,11 @@ NTSTATUS R0SimulateKernelProcessHiding(PVOID InputBuffer, ULONG InputSize,
                                 restored = TRUE;
                             }
                         } __except (EXCEPTION_EXECUTE_HANDLER) {
-                            
+
                             restored = FALSE;
                         }
                     }
 
-                    
                     if (!restored) {
                         pSys     = PsInitialSystemProcess;
                         pSysLink = (PLIST_ENTRY)((PCHAR)pSys + g_ActiveProcessLinksOffset);
@@ -2642,11 +3741,8 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
         op != R0SIMULATE_VAR_OP_LIST)
         return STATUS_INVALID_PARAMETER;
 
-    
     isPriv  = (g_SecureMode & 0x2000) && R0sIsPrivileged(PsGetCurrentProcess());
     seqMode = (!isPriv && (g_SecureMode & 0x4000) != 0);
-
-    
 
     if (op == R0SIMULATE_VAR_OP_LIST) {
         ULONG count = 0;
@@ -2729,8 +3825,6 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
         return STATUS_SUCCESS;
     }
 
-    
-
     {
         PVAR_TABLE_ENTRY target = NULL;
         ULONG            bit    = 0;
@@ -2740,8 +3834,6 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
             ULONG  chars;
             if (InputSize < sizeof(SET_INTERNAL_VAR_INPUT) + pIn->NameLength)
                 return STATUS_BUFFER_TOO_SMALL;
-
-            
 
             if ((g_SecureMode & 0x20000) && !isPriv)
                 return STATUS_ACCESS_DENIED;
@@ -2788,6 +3880,36 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
             return STATUS_SUCCESS;
         }
 
+        if (target->Address == (PVOID)(ULONG_PTR)&g_R0CallbackControl) {
+            g_R0CallbackControl = pIn->Value;
+            R0sInitCallbacks();     
+
+            if (OutputSize >= sizeof(UINT64)) {
+                __try { *(UINT64*)OutputBuffer = g_R0CallbackControl; }
+                __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
+                if (Info) *Info = sizeof(UINT64);
+            }
+            return STATUS_SUCCESS;
+        }
+
+        if (target->Address == (PVOID)(ULONG_PTR)&g_CallbackAltitude) {
+            if (pIn->Value < 300000 || pIn->Value > 400000)
+                return STATUS_INVALID_PARAMETER;
+
+            g_CallbackAltitude = (ULONG)pIn->Value;
+
+            R0sUninitAllCallbacks();
+
+            R0sInitCallbacks();
+
+            if (OutputSize >= sizeof(UINT64)) {
+                __try { *(UINT64*)OutputBuffer = (UINT64)g_CallbackAltitude; }
+                __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
+                if (Info) *Info = sizeof(UINT64);
+            }
+            return STATUS_SUCCESS;
+        }
+
         __try {
             if (target->Size == sizeof(ULONG))       *(ULONG*)target->Address = (ULONG)pIn->Value;
             else if (target->Size == sizeof(UINT64)) *(UINT64*)target->Address = pIn->Value;
@@ -2804,8 +3926,6 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
 {
     NTSTATUS status = STATUS_SUCCESS;
     KIRQL oldIrql;
-
-    
 
     if (g_GetFunctionMode == 0) {
         if (!g_FunctionTableBuilt) {
@@ -2836,7 +3956,6 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
                 if (InputSize < sizeof(GET_KERNEL_FUNCTION_INPUT) + nameLen - 1)
                     return STATUS_BUFFER_TOO_SMALL;
 
-                
                 if (OutputSize < sizeof(UINT64)) {
                     if (Info) *Info = sizeof(SSDT_ENTRY_INFO);
                     return STATUS_BUFFER_TOO_SMALL;
@@ -2865,7 +3984,6 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
 
                 if (address == 0) return STATUS_NOT_FOUND;
 
-                
                 if (OutputSize >= sizeof(SSDT_ENTRY_INFO)) {
                     __try {
                         PSSDT_ENTRY_INFO pOut = (PSSDT_ENTRY_INFO)OutputBuffer;
@@ -2882,7 +4000,7 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
                 }
                 return STATUS_SUCCESS;
             } else {
-                
+
                 ULONG count = 0;
                 ULONG requiredSize;
                 PSSDT_ENTRY_INFO pEntry;
@@ -2933,8 +4051,6 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
         }
     }
 
-    
-
     if (g_GetFunctionMode == 1) {
         if (!g_SsdtBuilt) {
             status = BuildSsdtTable();
@@ -2981,7 +4097,7 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
                 }
                 return STATUS_SUCCESS;
             } else {
-                
+
                 ULONG count = 0, required, idx;
                 PSSDT_ENTRY_INFO pOut;
                 PLIST_ENTRY pList;
@@ -3023,8 +4139,6 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
             }
         }
     }
-
-    
 
     if (g_GetFunctionMode == 2) {
         if (!g_Win32kSsdtBuilt) {
@@ -3072,7 +4186,7 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
                 }
                 return STATUS_SUCCESS;
             } else {
-                
+
                 ULONG count = 0, required, idx;
                 PSSDT_ENTRY_INFO pOut;
                 PLIST_ENTRY pList;
@@ -3114,8 +4228,6 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
             }
         }
     }
-
-    
 
     if (g_GetFunctionMode == 3) {
         if (!g_SsdtBuilt) {
@@ -3202,7 +4314,7 @@ NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
                 }
                 return STATUS_SUCCESS;
             } else {
-                
+
                 ULONG ntCount = 0, wkCount = 0, total, required, idx;
                 PSSDT_ENTRY_INFO pOut;
                 PLIST_ENTRY pList;
@@ -3679,64 +4791,334 @@ NTSTATUS R0SimulateCreateSystemThread(PVOID InputBuffer, ULONG InputSize,
     return status;
 }
 
-NTSTATUS R0SimulateDirectCreateDriver(PVOID InputBuffer, ULONG InputSize,
-                                      PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
+NTSTATUS R0SimulateCallbackControl(PVOID InputBuffer, ULONG InputSize,
+                                   PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
 {
-    NTSTATUS status;
-    PR0S_CREATE_DRIVER_INPUT pIn;
-    PR0S_CREATE_DRIVER_OUTPUT pOut;
-    UNICODE_STRING driverName;
-    PWCHAR kernelNameBuf = NULL;
-    ULONG  nameBytes;
-    BOOLEAN hasName;
+    NTSTATUS st = STATUS_SUCCESS;
+    PR0S_CB_BASE_INPUT pBase;
+    PR0S_CALLBACK_ENTRY entry;
+    PR0S_CALLBACK_ENTRY toFree = NULL;
+    HANDLE curTid, targetTid;
+    KIRQL oldIrql;
+    PLIST_ENTRY p;
+    BOOLEAN isPriv;
 
-    if (!InputBuffer || InputSize < sizeof(R0S_CREATE_DRIVER_INPUT))
+    if (!InputBuffer || InputSize < sizeof(R0S_CB_BASE_INPUT))
         return STATUS_INVALID_PARAMETER;
-    if (!OutputBuffer || OutputSize < sizeof(R0S_CREATE_DRIVER_OUTPUT))
-        return STATUS_BUFFER_TOO_SMALL;
 
-    pIn  = (PR0S_CREATE_DRIVER_INPUT)InputBuffer;
-    pOut = (PR0S_CREATE_DRIVER_OUTPUT)OutputBuffer;
-    RtlZeroMemory(pOut, sizeof(*pOut));
+    pBase = (PR0S_CB_BASE_INPUT)InputBuffer;
+    if (g_ShuttingDown && pBase->Operation != R0SCB_OP_LIST)
+        return STATUS_DELETE_PENDING;
 
-    if (pIn->InitFunction == 0) return STATUS_INVALID_PARAMETER;
-    hasName = (pIn->NameLength > 0);
+    curTid    = PsGetCurrentThreadId();
+    targetTid = (pBase->TargetTid == 0) ? curTid
+                                        : (HANDLE)(ULONG_PTR)pBase->TargetTid;
 
-    if (hasName) {
-        if (pIn->NameLength > 512) return STATUS_INVALID_PARAMETER;
-        if (pIn->NameLength % sizeof(WCHAR) != 0) return STATUS_INVALID_PARAMETER;
-        if (InputSize < sizeof(R0S_CREATE_DRIVER_INPUT) + pIn->NameLength - sizeof(WCHAR))
-            return STATUS_BUFFER_TOO_SMALL;
-
-        nameBytes = pIn->NameLength + sizeof(WCHAR);
-        kernelNameBuf = (PWCHAR)ExAllocatePoolWithTag(NonPagedPool, nameBytes, 'NAM0');
-        if (!kernelNameBuf) return STATUS_INSUFFICIENT_RESOURCES;
-
-        RtlZeroMemory(kernelNameBuf, nameBytes);
-        __try { RtlCopyMemory(kernelNameBuf, pIn->Name, pIn->NameLength); }
-        __except (EXCEPTION_EXECUTE_HANDLER) {
-            ExFreePoolWithTag(kernelNameBuf, 'NAM0');
-            return GetExceptionCode();
-        }
-        kernelNameBuf[pIn->NameLength / sizeof(WCHAR)] = L'\0';
-        RtlInitUnicodeString(&driverName, kernelNameBuf);
-    } else {
-        driverName.Buffer        = NULL;
-        driverName.Length        = 0;
-        driverName.MaximumLength = 0;
+    isPriv = (g_SecureMode & 0x2000) && R0sIsPrivileged(PsGetCurrentProcess());
+    if (!isPriv && targetTid != curTid &&
+        (pBase->Operation == R0SCB_OP_ADD ||
+         pBase->Operation == R0SCB_OP_REMOVE ||
+         pBase->Operation == R0SCB_OP_SET)) {
+        return STATUS_ACCESS_DENIED;
     }
 
-    __try {
-        status = IoCreateDriver(hasName ? &driverName : NULL,
-                                (PDRIVER_INITIALIZE)(ULONG_PTR)pIn->InitFunction);
-    } __except (EXCEPTION_EXECUTE_HANDLER) { status = GetExceptionCode(); }
+    switch (pBase->Operation) {
 
-    if (kernelNameBuf) ExFreePoolWithTag(kernelNameBuf, 'NAM0');
+    case R0SCB_OP_ADD: {
+        PR0S_CB_ADD_INPUT pIn = (PR0S_CB_ADD_INPUT)InputBuffer;
+        PETHREAD   tObj     = NULL;
+        PKEVENT    nEvt     = NULL, sEvt = NULL;
+        ULONG      prio     = 0;
+        KPROCESSOR_MODE prev;
+        BOOLEAN    exists   = FALSE;
+        BOOLEAN    prioTaken = FALSE;
 
-    pOut->DriverObject = 0;
-    pOut->Status       = status;
-    if (Info) *Info = sizeof(*pOut);
-    return status;
+        if (InputSize < sizeof(R0S_CB_ADD_INPUT)) return STATUS_INVALID_PARAMETER;
+        if (pIn->NotifyEvent == NULL || pIn->SyncEvent == NULL)
+            return STATUS_INVALID_PARAMETER;
+        if (pIn->SharedBuffer == 0 ||
+            pIn->SharedBufferSize < sizeof(R0S_CALLBACK_CONTEXT))
+            return STATUS_INVALID_PARAMETER;
+
+        st = PsLookupThreadByThreadId(targetTid, &tObj);
+        if (!NT_SUCCESS(st)) return st;
+
+        prev = ExGetPreviousMode();
+        st = ObReferenceObjectByHandle(pIn->NotifyEvent,
+                                       EVENT_MODIFY_STATE | SYNCHRONIZE,
+                                       *ExEventObjectType, prev,
+                                       (PVOID*)&nEvt, NULL);
+        if (!NT_SUCCESS(st)) { ObDereferenceObject(tObj); return st; }
+
+        st = ObReferenceObjectByHandle(pIn->SyncEvent,
+                                       EVENT_MODIFY_STATE | SYNCHRONIZE,
+                                       *ExEventObjectType, prev,
+                                       (PVOID*)&sEvt, NULL);
+        if (!NT_SUCCESS(st)) {
+            ObDereferenceObject(tObj);
+            ObDereferenceObject(nEvt);
+            return st;
+        }
+
+        __try {
+            ProbeForWrite((PVOID)(ULONG_PTR)pIn->SharedBuffer,
+                          sizeof(R0S_CALLBACK_CONTEXT), 1);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            ObDereferenceObject(tObj);
+            ObDereferenceObject(nEvt);
+            ObDereferenceObject(sEvt);
+            return GetExceptionCode();
+        }
+
+        prio = pIn->Priority ? pIn->Priority : R0sNextPriority();
+
+        entry = (PR0S_CALLBACK_ENTRY)ExAllocatePoolWithTag(
+                    NonPagedPool, sizeof(*entry), 'CBLT');
+        if (!entry) {
+            ObDereferenceObject(tObj);
+            ObDereferenceObject(nEvt);
+            ObDereferenceObject(sEvt);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        RtlZeroMemory(entry, sizeof(*entry));
+
+        entry->ThreadId         = targetTid;
+        entry->Thread           = tObj;
+        entry->OwnerProcess     = PsGetCurrentProcess();
+        ObReferenceObject(entry->OwnerProcess);
+        entry->CallbackMask     = 0;
+        entry->Priority         = prio;
+        entry->ExitStatus       = STATUS_PENDING;
+        entry->NotifyEvent      = nEvt;
+        entry->SyncEvent        = sEvt;
+        entry->SharedBuffer     = (PR0S_CALLBACK_CONTEXT)(ULONG_PTR)pIn->SharedBuffer;
+        entry->SharedBufferSize = pIn->SharedBufferSize;
+        entry->RefCount         = 0;
+        entry->Removing         = 0;
+        KeQuerySystemTime(&entry->RegisterTime);
+        InitializeListHead(&entry->EventQueueHead);
+        KeInitializeSpinLock(&entry->QueueLock);
+        entry->EventCount       = 0;
+        entry->TotalEventCount  = 0;
+        entry->QueueInitialized = TRUE;
+
+        KeAcquireSpinLock(&g_CallbackEntryLock, &oldIrql);
+        for (p = g_CallbackEntryListHead.Flink;
+             p != &g_CallbackEntryListHead; p = p->Flink) {
+            PR0S_CALLBACK_ENTRY e = CONTAINING_RECORD(p, R0S_CALLBACK_ENTRY, ListEntry);
+            if (e->Removing) continue;
+            if (e->ThreadId == targetTid) exists    = TRUE;
+            if (e->Priority == prio)      prioTaken = TRUE;
+        }
+        if (!exists && !prioTaken) {
+            InsertTailList(&g_CallbackEntryListHead, &entry->ListEntry);
+        }
+        KeReleaseSpinLock(&g_CallbackEntryLock, oldIrql);
+
+        if (exists)    { R0sFreeCallbackEntry(entry); return STATUS_ALREADY_COMMITTED; }
+        if (prioTaken) { R0sFreeCallbackEntry(entry); return STATUS_INVALID_PARAMETER; }
+
+        if (OutputSize >= sizeof(NTSTATUS)) {
+            *(NTSTATUS*)OutputBuffer = STATUS_SUCCESS;
+            if (Info) *Info = sizeof(NTSTATUS);
+        }
+        return STATUS_SUCCESS;
+    }
+
+    case R0SCB_OP_REMOVE: {
+        KeAcquireSpinLock(&g_CallbackEntryLock, &oldIrql);
+        entry = NULL;
+        for (p = g_CallbackEntryListHead.Flink;
+             p != &g_CallbackEntryListHead; p = p->Flink) {
+            PR0S_CALLBACK_ENTRY e = CONTAINING_RECORD(p, R0S_CALLBACK_ENTRY, ListEntry);
+            if (e->ThreadId == targetTid && !e->Removing) { entry = e; break; }
+        }
+        if (entry) {
+            RemoveEntryList(&entry->ListEntry);
+            InterlockedExchange(&entry->Removing, 1);
+            if (entry->RefCount == 0) toFree = entry;
+        }
+        KeReleaseSpinLock(&g_CallbackEntryLock, oldIrql);
+
+        if (!entry) return STATUS_NOT_FOUND;
+        if (toFree) R0sFreeCallbackEntry(toFree);
+
+        if (OutputSize >= sizeof(NTSTATUS)) {
+            *(NTSTATUS*)OutputBuffer = STATUS_SUCCESS;
+            if (Info) *Info = sizeof(NTSTATUS);
+        }
+        return STATUS_SUCCESS;
+    }
+
+    case R0SCB_OP_SET: {
+        PR0S_CB_SET_INPUT pIn = (PR0S_CB_SET_INPUT)InputBuffer;
+        if (InputSize < sizeof(R0S_CB_SET_INPUT)) return STATUS_INVALID_PARAMETER;
+
+        KeAcquireSpinLock(&g_CallbackEntryLock, &oldIrql);
+
+        entry = NULL;
+        for (p = g_CallbackEntryListHead.Flink;
+             p != &g_CallbackEntryListHead; p = p->Flink) {
+            PR0S_CALLBACK_ENTRY e = CONTAINING_RECORD(p, R0S_CALLBACK_ENTRY, ListEntry);
+            if (e->ThreadId == targetTid && !e->Removing) { entry = e; break; }
+        }
+        if (!entry) {
+            KeReleaseSpinLock(&g_CallbackEntryLock, oldIrql);
+            return STATUS_NOT_FOUND;
+        }
+
+        if (pIn->Flags & R0SCB_SET_FLAG_PRIORITY) {
+            for (p = g_CallbackEntryListHead.Flink;
+                 p != &g_CallbackEntryListHead; p = p->Flink) {
+                PR0S_CALLBACK_ENTRY e = CONTAINING_RECORD(p, R0S_CALLBACK_ENTRY, ListEntry);
+                if (e != entry && !e->Removing && e->Priority == pIn->Priority) {
+                    KeReleaseSpinLock(&g_CallbackEntryLock, oldIrql);
+                    return STATUS_INVALID_PARAMETER;
+                }
+            }
+        }
+
+        if (pIn->Flags & R0SCB_SET_FLAG_MASK)     entry->CallbackMask = pIn->Mask;
+        if (pIn->Flags & R0SCB_SET_FLAG_PRIORITY) entry->Priority     = pIn->Priority;
+
+        KeReleaseSpinLock(&g_CallbackEntryLock, oldIrql);
+
+        if (OutputSize >= sizeof(NTSTATUS)) {
+            *(NTSTATUS*)OutputBuffer = STATUS_SUCCESS;
+            if (Info) *Info = sizeof(NTSTATUS);
+        }
+        return STATUS_SUCCESS;
+    }
+
+    case R0SCB_OP_GET: {
+        PR0S_CB_GET_INPUT pIn = (PR0S_CB_GET_INPUT)InputBuffer;
+        UINT64 val = 0;
+
+        if (InputSize < sizeof(R0S_CB_GET_INPUT)) return STATUS_INVALID_PARAMETER;
+
+        if (pIn->GetType == R0SCB_GET_PENDING) {
+            ULONG  maxCount, outCount = 0;
+            PUCHAR pEntryBase;
+            KIRQL  qIrql;
+            PR0S_CALLBACK_ENTRY targetEntry = NULL;
+
+            if (OutputSize < sizeof(ULONG) * 2) return STATUS_BUFFER_TOO_SMALL;
+            maxCount = (OutputSize - sizeof(ULONG) * 2) / sizeof(R0S_CALLBACK_CONTEXT);
+            if (maxCount == 0) return STATUS_BUFFER_TOO_SMALL;
+            pEntryBase = (PUCHAR)OutputBuffer + sizeof(ULONG) * 2;
+
+            KeAcquireSpinLock(&g_CallbackEntryLock, &oldIrql);
+            for (p = g_CallbackEntryListHead.Flink;
+                 p != &g_CallbackEntryListHead; p = p->Flink) {
+                PR0S_CALLBACK_ENTRY ee = CONTAINING_RECORD(p, R0S_CALLBACK_ENTRY, ListEntry);
+                if (ee->ThreadId == targetTid && !ee->Removing) {
+                    InterlockedIncrement(&ee->RefCount);
+                    targetEntry = ee;
+                    break;
+                }
+            }
+            KeReleaseSpinLock(&g_CallbackEntryLock, oldIrql);
+
+            if (!targetEntry) return STATUS_NOT_FOUND;
+            if (!targetEntry->QueueInitialized) {
+                if (InterlockedDecrement(&targetEntry->RefCount) == 0 &&
+                    targetEntry->Removing) R0sFreeCallbackEntry(targetEntry);
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            KeAcquireSpinLock(&targetEntry->QueueLock, &qIrql);
+            while (outCount < maxCount && !IsListEmpty(&targetEntry->EventQueueHead)) {
+                PLIST_ENTRY p2 = RemoveHeadList(&targetEntry->EventQueueHead);
+                PR0S_EVENT_NODE node = CONTAINING_RECORD(p2, R0S_EVENT_NODE, ListEntry);
+                RtlCopyMemory(pEntryBase + (SIZE_T)outCount * sizeof(R0S_CALLBACK_CONTEXT),
+                              &node->ctx, sizeof(R0S_CALLBACK_CONTEXT));
+                outCount++;
+                ExFreePoolWithTag(node, 'EVNT');
+            }
+            if (targetEntry->EventCount >= (LONG)outCount)
+                targetEntry->EventCount -= (LONG)outCount;
+            else
+                targetEntry->EventCount = 0;
+            KeReleaseSpinLock(&targetEntry->QueueLock, qIrql);
+
+            if (InterlockedDecrement(&targetEntry->RefCount) == 0 &&
+                targetEntry->Removing) R0sFreeCallbackEntry(targetEntry);
+
+            ((PULONG)OutputBuffer)[0] = outCount;
+            ((PULONG)OutputBuffer)[1] = 0;
+            if (Info) *Info = sizeof(ULONG) * 2 +
+                              outCount * sizeof(R0S_CALLBACK_CONTEXT);
+            return STATUS_SUCCESS;
+        }
+
+        if (OutputSize < sizeof(UINT64)) return STATUS_BUFFER_TOO_SMALL;
+
+        KeAcquireSpinLock(&g_CallbackEntryLock, &oldIrql);
+        entry = NULL;
+        for (p = g_CallbackEntryListHead.Flink;
+             p != &g_CallbackEntryListHead; p = p->Flink) {
+            PR0S_CALLBACK_ENTRY e = CONTAINING_RECORD(p, R0S_CALLBACK_ENTRY, ListEntry);
+            if (e->ThreadId == targetTid && !e->Removing) { entry = e; break; }
+        }
+        if (entry) {
+            switch (pIn->GetType) {
+            case R0SCB_GET_MASK:       val = entry->CallbackMask;              break;
+            case R0SCB_GET_PRIORITY:   val = entry->Priority;                  break;
+            case R0SCB_GET_CALLCOUNT:  val = entry->CallCount;                 break;
+            case R0SCB_GET_EXITSTATUS: val = (UINT64)(ULONG)entry->ExitStatus; break;
+            case R0SCB_GET_LASTRESULT: val = (UINT64)(ULONG)entry->LastResult; break;
+            default:
+                KeReleaseSpinLock(&g_CallbackEntryLock, oldIrql);
+                return STATUS_INVALID_PARAMETER;
+            }
+        }
+        KeReleaseSpinLock(&g_CallbackEntryLock, oldIrql);
+
+        if (!entry) return STATUS_NOT_FOUND;
+        *(UINT64*)OutputBuffer = val;
+        if (Info) *Info = sizeof(UINT64);
+        return STATUS_SUCCESS;
+    }
+
+    case R0SCB_OP_LIST: {
+        PR0S_CALLBACK_CTL_OUTPUT pOut = (PR0S_CALLBACK_CTL_OUTPUT)OutputBuffer;
+        ULONG maxCnt, cnt = 0;
+
+        if (!OutputBuffer || OutputSize < sizeof(R0S_CALLBACK_CTL_OUTPUT))
+            return STATUS_BUFFER_TOO_SMALL;
+
+        maxCnt = (OutputSize - FIELD_OFFSET(R0S_CALLBACK_CTL_OUTPUT, Entries))
+                 / sizeof(R0S_CALLBACK_ENTRY_INFO);
+
+        KeAcquireSpinLock(&g_CallbackEntryLock, &oldIrql);
+        for (p = g_CallbackEntryListHead.Flink;
+             p != &g_CallbackEntryListHead && cnt < maxCnt; p = p->Flink) {
+            PR0S_CALLBACK_ENTRY e = CONTAINING_RECORD(p, R0S_CALLBACK_ENTRY, ListEntry);
+            if (e->Removing) continue;
+            pOut->Entries[cnt].ThreadId   = e->ThreadId;
+            pOut->Entries[cnt].ExitStatus = (e->Thread)
+                ? PsGetThreadExitStatus(e->Thread)
+                : STATUS_PROCESS_IS_TERMINATING;
+            pOut->Entries[cnt].Priority   = e->Priority;
+            pOut->Entries[cnt].Mask       = e->CallbackMask;
+            pOut->Entries[cnt].CallCount  = e->CallCount;
+            pOut->Entries[cnt].LastResult = (UINT64)(ULONG)e->LastResult;
+            cnt++;
+        }
+        KeReleaseSpinLock(&g_CallbackEntryLock, oldIrql);
+
+        pOut->Count    = cnt;
+        pOut->Enabled  = g_R0CallbackControl;
+        pOut->Reserved = 0;
+        RtlStringCchPrintfW(pOut->Altitude, 32, L"%u", g_CallbackAltitude);
+        if (Info) *Info = FIELD_OFFSET(R0S_CALLBACK_CTL_OUTPUT, Entries)
+                          + cnt * sizeof(R0S_CALLBACK_ENTRY_INFO);
+        return STATUS_SUCCESS;
+    }
+
+    default:
+        return STATUS_INVALID_PARAMETER;
+    }
 }
 
 NTSTATUS R0SimulateMSR(PVOID InputBuffer, ULONG InputSize,
@@ -3750,8 +5132,6 @@ NTSTATUS R0SimulateMSR(PVOID InputBuffer, ULONG InputSize,
         return STATUS_INVALID_PARAMETER;
     if (!OutputBuffer || OutputSize < sizeof(R0S_MSR_OUTPUT))
         return STATUS_BUFFER_TOO_SMALL;
-
-    
 
     __try {
         ProbeForRead(InputBuffer, sizeof(in), 1);
@@ -3774,8 +5154,6 @@ NTSTATUS R0SimulateMSR(PVOID InputBuffer, ULONG InputSize,
         status = out.Status;
     } else if (in.Operation == R0SMSR_OP_WRITE) {
         KIRQL oldIrql;
-
-        
 
         KeRaiseIrql(DISPATCH_LEVEL, &oldIrql);
         __try {
@@ -3875,7 +5253,6 @@ NTSTATUS R0SimulateAPC(PVOID InputBuffer, ULONG InputSize,
     __try { pIn = (PSYNC_KERNEL_APC_INPUT)InputBuffer; }
     __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
 
-    
     if (!pIn->ThreadId || !pIn->FunctionAddress || pIn->ArgumentCount > 32)
         return STATUS_INVALID_PARAMETER;
 
@@ -3917,7 +5294,7 @@ NTSTATUS R0SimulateAPC(PVOID InputBuffer, ULONG InputSize,
     pCtx->CompletionEvent = pEvent;
 
     __try {
-        
+
         RtlCopyMemory(pCtx->Arguments, pIn->Arguments,
                       pIn->ArgumentCount * sizeof(UINT64));
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -4026,7 +5403,6 @@ NTSTATUS R0SimulateArbitraryDriverCall(PVOID InputBuffer, ULONG InputSize,
             }
             RtlZeroMemory(sysBuffer, bufLen);
             if (pIn->InputLength > 0) {
-                
 
                 RtlCopyMemory(sysBuffer,
                               (PUCHAR)pIn + FIELD_OFFSET(R0S_CALL_DRIVER_INPUT, Data),
@@ -4038,21 +5414,18 @@ NTSTATUS R0SimulateArbitraryDriverCall(PVOID InputBuffer, ULONG InputSize,
         pSp->MajorFunction = (UCHAR)pIn->MajorFunction;
         pSp->MinorFunction = (UCHAR)pIn->MinorFunction;
 
-        
         pSp->FileObject = (PFILE_OBJECT)(ULONG_PTR)pIn->FileObject;
 
         if (isDeviceControl) {
             pSp->Parameters.DeviceIoControl.IoControlCode      = pIn->IoControlCode;
             pSp->Parameters.DeviceIoControl.InputBufferLength  = pIn->InputLength;
             pSp->Parameters.DeviceIoControl.OutputBufferLength = pIn->OutputLength;
-            
+
             pSp->Parameters.DeviceIoControl.Type3InputBuffer   =
                 (PVOID)(ULONG_PTR)pIn->Type3InputBuffer;
         }
 
         pIrp->AssociatedIrp.SystemBuffer = sysBuffer;
-
-        
 
         if (pIn->UserOutputBuffer != 0) {
             pIrp->UserBuffer = (PVOID)(ULONG_PTR)pIn->UserOutputBuffer;
@@ -4076,8 +5449,6 @@ NTSTATUS R0SimulateArbitraryDriverCall(PVOID InputBuffer, ULONG InputSize,
         pOut->Status      = status;
         pOut->Information = copyOut;
         pOut->Reserved    = 0;
-
-        
 
         if (copyOut > 0 && sysBuffer && pIn->UserOutputBuffer == 0) {
             ULONG hdrSize = FIELD_OFFSET(R0S_CALL_DRIVER_OUTPUT, Data);
@@ -4111,7 +5482,7 @@ static const char* R0S_FuncName(ULONG idx)
         case IOCTL_INDEX_IO:                    return "R0SimulateIO";
         case IOCTL_INDEX_AUTHORIZED_LIST:       return "R0SimulateAuthorizedList";
         case IOCTL_INDEX_CREATE_SYSTEM_THREAD:  return "R0SimulateCreateSystemThread";
-        case IOCTL_INDEX_DIRECT_CREATE_DRIVER:  return "R0SimulateDirectCreateDriver";
+        case IOCTL_INDEX_CALLBACK_CONTROL:      return "R0SimulateCallbackControl";
         case IOCTL_INDEX_MSR:                   return "R0SimulateMSR";
         case IOCTL_INDEX_APC:                   return "R0SimulateAPC";
         case IOCTL_INDEX_ARBITRARY_DRIVER_CALL: return "R0SimulateArbitraryDriverCall";
@@ -4260,12 +5631,12 @@ static VOID R0S_LogIn(ULONG code, ULONG idx, PVOID inputBuffer, ULONG inputSize)
                          tid, pid, fn, p->StartRoutine, p->StartContext, p->DesiredAccess);
                 break;
             }
-            case IOCTL_INDEX_DIRECT_CREATE_DRIVER: {
-                if (!inputBuffer || inputSize < sizeof(R0S_CREATE_DRIVER_INPUT))
+            case IOCTL_INDEX_CALLBACK_CONTROL: {
+                if (!inputBuffer || inputSize < sizeof(R0S_CB_BASE_INPUT))
                     { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
-                PR0S_CREATE_DRIVER_INPUT p = (PR0S_CREATE_DRIVER_INPUT)inputBuffer;
-                DbgPrint("R0S IN  tid=%p pid=%p func=%s init=0x%I64X nameLen=%u\n",
-                         tid, pid, fn, p->InitFunction, p->NameLength);
+                PR0S_CB_BASE_INPUT p = (PR0S_CB_BASE_INPUT)inputBuffer;
+                DbgPrint("R0S IN  tid=%p pid=%p func=%s op=0x%X targetTid=%u\n",
+                         tid, pid, fn, p->Operation, p->TargetTid);
                 break;
             }
             case IOCTL_INDEX_MSR: {
@@ -4400,16 +5771,10 @@ static VOID R0S_LogOut(ULONG code, ULONG idx, NTSTATUS status, ULONG_PTR info,
                          tid, pid, fn, (ULONG)st, h, (ULONG)info);
                 break;
             }
-            case IOCTL_INDEX_DIRECT_CREATE_DRIVER: {
-                UINT64 drv = 0; NTSTATUS st = status;
-                if (outputBuffer && outputSize >= sizeof(R0S_CREATE_DRIVER_OUTPUT)) {
-                    PR0S_CREATE_DRIVER_OUTPUT p = (PR0S_CREATE_DRIVER_OUTPUT)outputBuffer;
-                    drv = p->DriverObject; st = (NTSTATUS)p->Status;
-                }
-                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X drvObj=0x%I64X info=%u\n",
-                         tid, pid, fn, (ULONG)st, drv, (ULONG)info);
+            case IOCTL_INDEX_CALLBACK_CONTROL:
+                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X info=%u\n",
+                         tid, pid, fn, (ULONG)status, (ULONG)info);
                 break;
-            }
             case IOCTL_INDEX_MSR: {
                 UINT64 val = 0; NTSTATUS st = status;
                 if (outputBuffer && outputSize >= sizeof(R0S_MSR_OUTPUT)) {
@@ -4488,10 +5853,8 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         return STATUS_INVALID_DEVICE_REQUEST;
     }
 
-    
     isPriv = (g_SecureMode & 0x2000) && R0sIsPrivileged(PsGetCurrentProcess());
 
-    
     if (!isPriv && (g_SecureMode & 0x10000)) {
         __try {
             KIRQL   oldIrql;
@@ -4528,31 +5891,73 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 
     __try {
         PFN_IOCTL_HANDLER handler;
+        BOOLEAN cbBlocked = FALSE;
 
         if (!isPriv) {
-            
-            if (R0S_MASK_TEST(g_IoctlDisable, idx)) { status = STATUS_ACCESS_DENIED; __leave; }
-
+            if (R0S_MASK_TEST(g_IoctlDisable, idx)) {
+                status = STATUS_ACCESS_DENIED;
+                __leave;
+            }
             if (g_SecureMode != 0) {
                 status = R0sCheckSecureMode(g_SecureMode);
                 if (!NT_SUCCESS(status)) { __leave; }
             }
-
-            if (!R0sIsIoctlAuthorized(idx)) { status = STATUS_ACCESS_DENIED; __leave; }
+            if (!R0sIsIoctlAuthorized(idx)) {
+                status = STATUS_ACCESS_DENIED;
+                __leave;
+            }
         }
 
-        handler = (PFN_IOCTL_HANDLER)(ULONG_PTR)g_IoctlHandler[idx];
+        if (!isPriv &&
+            (g_R0CallbackControl & (1ULL << (R0SCB_IOCTL_BASE + idx)))) {
+            UINT64   cbArgs[8] = {0};
+            NTSTATUS cbStatus;
 
-        __try {
-            status = handler(inputBuffer, inputSize, outputBuffer, outputSize, &info);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-            status = GetExceptionCode();
-            info   = 0;
+            cbArgs[0] = (UINT64)code;
+            cbArgs[1] = (UINT64)inputSize;
+            cbArgs[2] = (UINT64)outputSize;
+            cbArgs[3] = (UINT64)(ULONG_PTR)PsGetCurrentProcessId();
+            cbArgs[4] = (UINT64)(ULONG_PTR)PsGetCurrentThreadId();
+            cbArgs[5] = (UINT64)(ULONG_PTR)inputBuffer;
+            cbArgs[6] = (UINT64)(ULONG_PTR)outputBuffer;
+            cbArgs[7] = 0;
+
+            cbStatus = R0sDispatchCallback(R0SCB_IOCTL_BASE + idx, cbArgs, 7, NULL);
+
+            if (cbStatus != STATUS_SUCCESS) {
+                cbBlocked = TRUE;
+                status    = cbStatus;
+                info      = 0;
+
+                if (outputBuffer && outputSize > 0) {
+                    __try {
+                        RtlZeroMemory(outputBuffer, outputSize);
+                    } __except (EXCEPTION_EXECUTE_HANDLER) {
+                        status = GetExceptionCode();
+                        info   = 0;
+                    }
+                }
+
+                if (g_DebugMode & (1ULL << (48 + idx)))
+                    DbgPrint("R0S: IOCTL idx=%lu BLOCKED by pre-callback st=0x%08X\n",
+                             idx, (ULONG)cbStatus);
+            }
         }
 
-        if (NT_SUCCESS(status)) {
-            __try { g_IoctlCount[idx]++; }
-            __except (EXCEPTION_EXECUTE_HANDLER) { }
+        if (!cbBlocked) {
+            handler = (PFN_IOCTL_HANDLER)(ULONG_PTR)g_IoctlHandler[idx];
+
+            __try {
+                status = handler(inputBuffer, inputSize, outputBuffer, outputSize, &info);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                status = GetExceptionCode();
+                info   = 0;
+            }
+
+            if (NT_SUCCESS(status)) {
+                __try { g_IoctlCount[idx]++; }
+                __except (EXCEPTION_EXECUTE_HANDLER) { }
+            }
         }
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -4562,7 +5967,7 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 
     R0S_LogOut(code, idx, status, info, outputBuffer, outputSize);
 
-    Irp->IoStatus.Status = status;
+    Irp->IoStatus.Status      = status;
     Irp->IoStatus.Information = info;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
     return status;
@@ -4573,20 +5978,20 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     NTSTATUS status = STATUS_SUCCESS;
     PDEVICE_OBJECT deviceObject = NULL;
     BOOLEAN symLinkCreated = FALSE;
-    BOOLEAN deviceCreated = FALSE;
+    BOOLEAN deviceCreated  = FALSE;
 
     UNREFERENCED_PARAMETER(RegistryPath);
 
     g_StartTime = (UINT64)KeQueryInterruptTime();
 
     status = InitDynamicOffsets();
-    if (!NT_SUCCESS(status)) return status;
+    if (!NT_SUCCESS(status)) goto Exit;
 
     __try {
         UNICODE_STRING devName;
         g_DriverObject = DriverObject;
-        g_DriverBase = (UINT64)(ULONG_PTR)DriverObject->DriverStart;
-        g_DriverSize = DriverObject->DriverSize;
+        g_DriverBase   = (UINT64)(ULONG_PTR)DriverObject->DriverStart;
+        g_DriverSize   = DriverObject->DriverSize;
         g_StartAddress = (UINT64)(ULONG_PTR)DriverObject->DriverInit;
 
         RtlZeroMemory(g_IoctlHandler, sizeof(g_IoctlHandler));
@@ -4602,7 +6007,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         g_IoctlHandler[IOCTL_INDEX_IO]                    = (UINT64)(ULONG_PTR)&R0SimulateIO;
         g_IoctlHandler[IOCTL_INDEX_AUTHORIZED_LIST]       = (UINT64)(ULONG_PTR)&R0SimulateAuthorizedListOperations;
         g_IoctlHandler[IOCTL_INDEX_CREATE_SYSTEM_THREAD]  = (UINT64)(ULONG_PTR)&R0SimulateCreateSystemThread;
-        g_IoctlHandler[IOCTL_INDEX_DIRECT_CREATE_DRIVER]  = (UINT64)(ULONG_PTR)&R0SimulateDirectCreateDriver;
+        g_IoctlHandler[IOCTL_INDEX_CALLBACK_CONTROL]      = (UINT64)(ULONG_PTR)&R0SimulateCallbackControl;
         g_IoctlHandler[IOCTL_INDEX_MSR]                   = (UINT64)(ULONG_PTR)&R0SimulateMSR;
         g_IoctlHandler[IOCTL_INDEX_APC]                   = (UINT64)(ULONG_PTR)&R0SimulateAPC;
         g_IoctlHandler[IOCTL_INDEX_ARBITRARY_DRIVER_CALL] = (UINT64)(ULONG_PTR)&R0SimulateArbitraryDriverCall;
@@ -4651,38 +6056,72 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 
         KeInitializeSpinLock(&g_RateLock);
 
+        InitializeListHead(&g_CallbackEntryListHead);
+        KeInitializeSpinLock(&g_CallbackEntryLock);
+
         RegisterAllVariables();
+        R0sInitCallbacks();
 
         deviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
         status = STATUS_SUCCESS;
     }
-    __except(EXCEPTION_EXECUTE_HANDLER) { status = GetExceptionCode(); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { status = GetExceptionCode(); }
 
     if (!NT_SUCCESS(status)) {
         if (symLinkCreated) IoDeleteSymbolicLink(&g_SymLinkName);
         if (deviceCreated && deviceObject) IoDeleteDevice(deviceObject);
         g_DeviceObject = NULL;
     }
+
+Exit:
+    if (g_DebugMode & 0x0000800000000000ULL)
+        DbgPrint("R0S: DriverEntry status=0x%08X start=%I64u\n",
+                 status, g_StartTime);
     return status;
 }
 
 VOID DriverUnload(PDRIVER_OBJECT DriverObject)
 {
     KIRQL oldIrql;
-    PLIST_ENTRY pList;
-    PLIST_ENTRY pNext;
+    PLIST_ENTRY pList, pNext;
     PHIDDEN_PROCESS_ENTRY pEntry;
     PFUNCTION_ENTRY pFunc;
     PSSDT_ENTRY pSsdt;
     PWIN32K_SSDT_ENTRY pW;
-    PEPROCESS pSys;
-    PLIST_ENTRY pLink;
-    PLIST_ENTRY pSysLink;
+    LARGE_INTEGER interval;
+    ULONG i;
 
     UNREFERENCED_PARAMETER(DriverObject);
 
-    if (g_DebugMode & 0x8000000000000000ULL) {
-        DbgPrint("R0S: DriverUnload entered, tearing down\n");
+    InterlockedExchange(&g_ShuttingDown, 1);
+    InterlockedExchange64((volatile LONG64*)&g_R0CallbackControl, 0);
+
+    R0sUninitAllCallbacks();
+
+    interval.QuadPart = -10000LL * 100;   
+
+    for (i = 0; i < 60 && g_InCallbackCount > 0; i++) {
+        KeDelayExecutionThread(KernelMode, FALSE, &interval);
+    }
+
+    for (;;) {
+        PR0S_CALLBACK_ENTRY e = NULL;
+
+        KeAcquireSpinLock(&g_CallbackEntryLock, &oldIrql);
+        if (!IsListEmpty(&g_CallbackEntryListHead)) {
+            pList = RemoveHeadList(&g_CallbackEntryListHead);
+            e = CONTAINING_RECORD(pList, R0S_CALLBACK_ENTRY, ListEntry);
+            InterlockedExchange(&e->Removing, 1);
+        }
+        KeReleaseSpinLock(&g_CallbackEntryLock, oldIrql);
+
+        if (!e) break;
+
+        for (i = 0; i < 60 && e->RefCount > 0; i++) {
+            KeDelayExecutionThread(KernelMode, FALSE, &interval);
+        }
+
+        R0sFreeCallbackEntry(e);
     }
 
     __try {
@@ -4695,10 +6134,10 @@ VOID DriverUnload(PDRIVER_OBJECT DriverObject)
             KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
 
             if (pEntry->EProcess) {
-                pLink    = (PLIST_ENTRY)((PCHAR)pEntry->EProcess + g_ActiveProcessLinksOffset);
-                pSys     = PsInitialSystemProcess;
-                pSysLink = (PLIST_ENTRY)((PCHAR)pSys + g_ActiveProcessLinksOffset);
-                __try { InsertHeadList(pSysLink, pLink); } __except(EXCEPTION_EXECUTE_HANDLER) {}
+                PLIST_ENTRY pLink    = (PLIST_ENTRY)((PCHAR)pEntry->EProcess + g_ActiveProcessLinksOffset);
+                PEPROCESS   pSys     = PsInitialSystemProcess;
+                PLIST_ENTRY pSysLink = (PLIST_ENTRY)((PCHAR)pSys + g_ActiveProcessLinksOffset);
+                __try { InsertHeadList(pSysLink, pLink); } __except (EXCEPTION_EXECUTE_HANDLER) {}
                 ObDereferenceObject(pEntry->EProcess);
             }
             ExFreePoolWithTag(pEntry, 'HIDE');
@@ -4707,42 +6146,38 @@ VOID DriverUnload(PDRIVER_OBJECT DriverObject)
             pList = pNext;
         }
         KeReleaseSpinLock(&g_HiddenListLock, oldIrql);
-    } __except(EXCEPTION_EXECUTE_HANDLER) { }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { }
 
     __try {
         KeAcquireSpinLock(&g_FunctionTableLock, &oldIrql);
         pList = g_FunctionTableHead.Flink;
         while (pList != &g_FunctionTableHead) {
-            pFunc  = CONTAINING_RECORD(pList, FUNCTION_ENTRY, ListEntry);
-            pNext  = pList->Flink;
+            pFunc = CONTAINING_RECORD(pList, FUNCTION_ENTRY, ListEntry);
+            pNext = pList->Flink;
             RemoveEntryList(pList);
             KeReleaseSpinLock(&g_FunctionTableLock, oldIrql);
-
             if (pFunc->Name.Buffer) ExFreePoolWithTag(pFunc->Name.Buffer, 'FNAM');
             ExFreePoolWithTag(pFunc, 'FENT');
-
             KeAcquireSpinLock(&g_FunctionTableLock, &oldIrql);
             pList = pNext;
         }
         KeReleaseSpinLock(&g_FunctionTableLock, oldIrql);
-    } __except(EXCEPTION_EXECUTE_HANDLER) { }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { }
 
     __try {
         KeAcquireSpinLock(&g_SsdtListLock, &oldIrql);
         pList = g_SsdtListHead.Flink;
         while (pList != &g_SsdtListHead) {
-            pSsdt  = CONTAINING_RECORD(pList, SSDT_ENTRY, ListEntry);
-            pNext  = pList->Flink;
+            pSsdt = CONTAINING_RECORD(pList, SSDT_ENTRY, ListEntry);
+            pNext = pList->Flink;
             RemoveEntryList(pList);
             KeReleaseSpinLock(&g_SsdtListLock, oldIrql);
-
             ExFreePoolWithTag(pSsdt, 'SSDT');
-
             KeAcquireSpinLock(&g_SsdtListLock, &oldIrql);
             pList = pNext;
         }
         KeReleaseSpinLock(&g_SsdtListLock, oldIrql);
-    } __except(EXCEPTION_EXECUTE_HANDLER) { }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { }
 
     __try {
         KeAcquireSpinLock(&g_Win32kSsdtListLock, &oldIrql);
@@ -4752,17 +6187,15 @@ VOID DriverUnload(PDRIVER_OBJECT DriverObject)
             pNext = pList->Flink;
             RemoveEntryList(pList);
             KeReleaseSpinLock(&g_Win32kSsdtListLock, oldIrql);
-
             ExFreePoolWithTag(pW, 'W32K');
-
             KeAcquireSpinLock(&g_Win32kSsdtListLock, &oldIrql);
             pList = pNext;
         }
         KeReleaseSpinLock(&g_Win32kSsdtListLock, oldIrql);
-    } __except(EXCEPTION_EXECUTE_HANDLER) { }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { }
 
-    __try { R0sFreeAuthList(); } __except(EXCEPTION_EXECUTE_HANDLER) { }
-    __try { FreeVarTable(); } __except(EXCEPTION_EXECUTE_HANDLER) { }
+    __try { R0sFreeAuthList(); } __except (EXCEPTION_EXECUTE_HANDLER) { }
+    __try { FreeVarTable(); }    __except (EXCEPTION_EXECUTE_HANDLER) { }
 
     __try {
         if (g_DeviceObject) {
@@ -4770,12 +6203,12 @@ VOID DriverUnload(PDRIVER_OBJECT DriverObject)
             IoDeleteDevice(g_DeviceObject);
             g_DeviceObject = NULL;
         }
-    }
-    __except(EXCEPTION_EXECUTE_HANDLER) { }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { }
 
-    if (g_DebugMode & 0x8000000000000000ULL) {
-        DbgPrint("R0S: DriverUnload done\n");
-    }
+    if (g_DebugMode & 0x0000400000000000ULL)
+        DbgPrint("R0S: DriverUnload status=0x%08X uptime=%I64u\n",
+                 STATUS_SUCCESS,
+                 (UINT64)KeQueryInterruptTime());
 }
 
 NTSTATUS DriverCreateClose(PDEVICE_OBJECT DeviceObject, PIRP Irp)
