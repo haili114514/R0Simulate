@@ -388,7 +388,7 @@ typedef struct _R0S_CALLBACK_CONTEXT {
     UINT64   Args[8];
     UINT64   NewAccessMask;
     ULONG    HasNewAccess;
-    ULONG    Reserved2;
+    ULONG    NotifyOnly;
     WCHAR    Text[260];
 } R0S_CALLBACK_CONTEXT, *PR0S_CALLBACK_CONTEXT;
 
@@ -405,7 +405,7 @@ typedef struct _R0S_CB_ADD_INPUT {
     HANDLE SyncEvent;
     PVOID  SharedBuffer;
     ULONG  SharedBufferSize;
-    ULONG  Reserved2;
+    ULONG  NotifyOnly;
 } R0S_CB_ADD_INPUT, *PR0S_CB_ADD_INPUT;
 
 typedef struct _R0S_CB_SET_INPUT {
