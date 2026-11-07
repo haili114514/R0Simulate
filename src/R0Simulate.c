@@ -924,9 +924,7 @@ static NTSTATUS R0sRegisterVariable(ULONG Size, PVOID Address, const WCHAR* Name
 static PVAR_TABLE_ENTRY FindVarById(ULONG Id)
 {
     PVAR_TABLE_ENTRY found = NULL;
-    KIRQL oldIrql;
 
-    KeAcquireSpinLock(&g_VarTableLock, &oldIrql);
     __try {
         PLIST_ENTRY p = g_VarTableHead.Flink;
         while (p != &g_VarTableHead) {
@@ -935,10 +933,7 @@ static PVAR_TABLE_ENTRY FindVarById(ULONG Id)
             p = p->Flink;
         }
     }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        found = NULL;
-    }
-    KeReleaseSpinLock(&g_VarTableLock, oldIrql);
+    __except (EXCEPTION_EXECUTE_HANDLER) { found = NULL; }
     return found;
 }
 
@@ -948,7 +943,6 @@ static PVAR_TABLE_ENTRY FindVarByName(const WCHAR* Name, ULONG NameChars)
     ULONG             copyChars;
     BOOLEAN           copyOk = FALSE;
     PVAR_TABLE_ENTRY  found = NULL;
-    KIRQL             oldIrql;
 
     if (!Name || NameChars == 0) return NULL;
     copyChars = (NameChars > 63) ? 63 : NameChars;
@@ -958,13 +952,9 @@ static PVAR_TABLE_ENTRY FindVarByName(const WCHAR* Name, ULONG NameChars)
         for (k = 0; k < copyChars; k++) nameBuf[k] = Name[k];
         nameBuf[copyChars] = L'\0';
         copyOk = TRUE;
-    } __except(EXCEPTION_EXECUTE_HANDLER) {
-        copyOk = FALSE;
-    }
-
+    } __except(EXCEPTION_EXECUTE_HANDLER) { copyOk = FALSE; }
     if (!copyOk) return NULL;
 
-    KeAcquireSpinLock(&g_VarTableLock, &oldIrql);
     __try {
         PLIST_ENTRY p = g_VarTableHead.Flink;
         while (p != &g_VarTableHead) {
@@ -974,7 +964,6 @@ static PVAR_TABLE_ENTRY FindVarByName(const WCHAR* Name, ULONG NameChars)
         }
     }
     __except (EXCEPTION_EXECUTE_HANDLER) { found = NULL; }
-    KeReleaseSpinLock(&g_VarTableLock, oldIrql);
     return found;
 }
 
@@ -3697,7 +3686,6 @@ NTSTATUS R0SimulateGetSystemToken(PVOID InputBuffer, ULONG InputSize,
 
 static ULONG R0sMapVisibleIndexToId(ULONG visibleIndex, BOOLEAN isPriv)
 {
-    KIRQL       oldIrql;
     PLIST_ENTRY p;
     ULONG       visibleCount = 0;
     ULONG       result = 0;
@@ -3705,7 +3693,6 @@ static ULONG R0sMapVisibleIndexToId(ULONG visibleIndex, BOOLEAN isPriv)
     if (visibleIndex == 0) return 0;
     if (isPriv)            return visibleIndex;
 
-    KeAcquireSpinLock(&g_VarTableLock, &oldIrql);
     __try {
         p = g_VarTableHead.Flink;
         while (p != &g_VarTableHead) {
@@ -3717,8 +3704,8 @@ static ULONG R0sMapVisibleIndexToId(ULONG visibleIndex, BOOLEAN isPriv)
             }
             p = p->Flink;
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) { result = 0; }
-    KeReleaseSpinLock(&g_VarTableLock, oldIrql);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) { result = 0; }
     return result;
 }
 
@@ -3828,97 +3815,119 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
     {
         PVAR_TABLE_ENTRY target = NULL;
         ULONG            bit    = 0;
+        KIRQL            oldIrql;
+        NTSTATUS         ret    = STATUS_SUCCESS;
+        UINT64           outVal = 0;
+        BOOLEAN          haveOutVal      = FALSE;
+        BOOLEAN          reinitAltitude  = FALSE;
+        BOOLEAN          reinitCallbacks = FALSE;
+        BOOLEAN          needAntiKill    = FALSE;
+
+        if (op == R0SIMULATE_VAR_OP_GET && OutputSize < sizeof(UINT64))
+            return STATUS_BUFFER_TOO_SMALL;
 
         if (pIn->NameLength > 0) {
-            PWCHAR pName;
-            ULONG  chars;
             if (InputSize < sizeof(SET_INTERNAL_VAR_INPUT) + pIn->NameLength)
                 return STATUS_BUFFER_TOO_SMALL;
-
             if ((g_SecureMode & 0x20000) && !isPriv)
                 return STATUS_ACCESS_DENIED;
-
-            pName = (PWCHAR)((PUCHAR)pIn + sizeof(SET_INTERNAL_VAR_INPUT));
-            chars = pIn->NameLength / sizeof(WCHAR);
-            if (chars > 0 && pName[chars - 1] == L'\0') chars--;
-            target = FindVarByName(pName, chars);
-        } else {
-            ULONG lookupId = pIn->VariableId;
-            if (seqMode) {
-                lookupId = R0sMapVisibleIndexToId(pIn->VariableId, FALSE);
-                if (lookupId == 0) return STATUS_INVALID_PARAMETER;
-            }
-            target = FindVarById(lookupId);
-        }
-        if (!target) return STATUS_INVALID_PARAMETER;
-
-        bit = target->Id - 1;
-
-        if (!isPriv && op == R0SIMULATE_VAR_OP_GET &&
-            R0S_ATTR_TEST(g_ReadAttrDescriptor_Low, g_ReadAttrDescriptor_High, bit))
-            return STATUS_ACCESS_DENIED;
-        if (!isPriv && op == R0SIMULATE_VAR_OP_SET &&
-            R0S_ATTR_TEST(g_WriteAttrDescriptor_Low, g_WriteAttrDescriptor_High, bit))
-            return STATUS_ACCESS_DENIED;
-
-        if (!isPriv && op == R0SIMULATE_VAR_OP_SET &&
-            (g_SecureMode & 0x1000) &&
-            target->Address == (PVOID)(ULONG_PTR)&g_AuthDefaultMask &&
-            pIn->Value == R0S_MASK_PRIVILEGED)
-            return STATUS_ACCESS_DENIED;
-
-        if (op == R0SIMULATE_VAR_OP_GET) {
-            UINT64 val = 0;
-            if (OutputSize < sizeof(UINT64)) return STATUS_BUFFER_TOO_SMALL;
-            __try {
-                if (target->Size == sizeof(ULONG))       val = *(ULONG*)target->Address;
-                else if (target->Size == sizeof(UINT64)) val = *(UINT64*)target->Address;
-                else RtlCopyMemory(&val, target->Address, target->Size);
-                *(UINT64*)OutputBuffer = val;
-            } __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
-            if (Info) *Info = sizeof(UINT64);
-            return STATUS_SUCCESS;
         }
 
-        if (target->Address == (PVOID)(ULONG_PTR)&g_R0CallbackControl) {
-            g_R0CallbackControl = pIn->Value;
-            R0sInitCallbacks();     
-
-            if (OutputSize >= sizeof(UINT64)) {
-                __try { *(UINT64*)OutputBuffer = g_R0CallbackControl; }
-                __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
-                if (Info) *Info = sizeof(UINT64);
-            }
-            return STATUS_SUCCESS;
-        }
-
-        if (target->Address == (PVOID)(ULONG_PTR)&g_CallbackAltitude) {
-            if (pIn->Value < 300000 || pIn->Value > 400000)
-                return STATUS_INVALID_PARAMETER;
-
-            g_CallbackAltitude = (ULONG)pIn->Value;
-
-            R0sUninitAllCallbacks();
-
-            R0sInitCallbacks();
-
-            if (OutputSize >= sizeof(UINT64)) {
-                __try { *(UINT64*)OutputBuffer = (UINT64)g_CallbackAltitude; }
-                __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
-                if (Info) *Info = sizeof(UINT64);
-            }
-            return STATUS_SUCCESS;
-        }
-
+        KeAcquireSpinLock(&g_VarTableLock, &oldIrql);
         __try {
-            if (target->Size == sizeof(ULONG))       *(ULONG*)target->Address = (ULONG)pIn->Value;
-            else if (target->Size == sizeof(UINT64)) *(UINT64*)target->Address = pIn->Value;
-            else RtlCopyMemory(target->Address, &pIn->Value, target->Size);
-        } __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
+            if (pIn->NameLength > 0) {
+                PWCHAR pName = (PWCHAR)((PUCHAR)pIn + sizeof(SET_INTERNAL_VAR_INPUT));
+                ULONG  chars = pIn->NameLength / sizeof(WCHAR);
+                if (chars > 0 && pName[chars - 1] == L'\0') chars--;
+                target = FindVarByName(pName, chars);
+            } else {
+                ULONG lookupId = pIn->VariableId;
+                if (seqMode) {
+                    lookupId = R0sMapVisibleIndexToId(pIn->VariableId, FALSE);
+                    if (lookupId == 0) { ret = STATUS_INVALID_PARAMETER; goto Done; }
+                }
+                target = FindVarById(lookupId);
+            }
+            if (!target) { ret = STATUS_INVALID_PARAMETER; goto Done; }
 
-        if (target->Address == (PVOID)(ULONG_PTR)&g_SecureMode) UpdateAntiKill();
+            bit = target->Id - 1;
+
+            if (!isPriv && op == R0SIMULATE_VAR_OP_GET &&
+                R0S_ATTR_TEST(g_ReadAttrDescriptor_Low, g_ReadAttrDescriptor_High, bit))
+                { ret = STATUS_ACCESS_DENIED; goto Done; }
+
+            if (!isPriv && op == R0SIMULATE_VAR_OP_SET &&
+                R0S_ATTR_TEST(g_WriteAttrDescriptor_Low, g_WriteAttrDescriptor_High, bit))
+                { ret = STATUS_ACCESS_DENIED; goto Done; }
+
+            if (!isPriv && op == R0SIMULATE_VAR_OP_SET &&
+                (g_SecureMode & 0x1000) &&
+                target->Address == (PVOID)(ULONG_PTR)&g_AuthDefaultMask &&
+                pIn->Value == R0S_MASK_PRIVILEGED)
+                { ret = STATUS_ACCESS_DENIED; goto Done; }
+
+            if (op == R0SIMULATE_VAR_OP_GET) {
+                __try {
+                    if (target->Size == sizeof(ULONG))       outVal = *(ULONG*)target->Address;
+                    else if (target->Size == sizeof(UINT64)) outVal = *(UINT64*)target->Address;
+                    else RtlCopyMemory(&outVal, target->Address, target->Size);
+                } __except (EXCEPTION_EXECUTE_HANDLER) { ret = GetExceptionCode(); goto Done; }
+                haveOutVal = TRUE;
+                ret = STATUS_SUCCESS;
+                goto Done;
+            }
+
+            if (target->Address == (PVOID)(ULONG_PTR)&g_R0CallbackControl) {
+                g_R0CallbackControl = pIn->Value;
+                reinitCallbacks = TRUE;
+                outVal     = g_R0CallbackControl;
+                haveOutVal = TRUE;
+                ret = STATUS_SUCCESS;
+                goto Done;
+            }
+
+            if (target->Address == (PVOID)(ULONG_PTR)&g_CallbackAltitude) {
+                if (pIn->Value < 300000 || pIn->Value > 400000)
+                    { ret = STATUS_INVALID_PARAMETER; goto Done; }
+                g_CallbackAltitude = (ULONG)pIn->Value;
+                reinitAltitude  = TRUE;
+                reinitCallbacks = TRUE;
+                outVal     = (UINT64)g_CallbackAltitude;
+                haveOutVal = TRUE;
+                ret = STATUS_SUCCESS;
+                goto Done;
+            }
+
+            __try {
+                if (target->Size == sizeof(ULONG))       *(ULONG*)target->Address = (ULONG)pIn->Value;
+                else if (target->Size == sizeof(UINT64)) *(UINT64*)target->Address = pIn->Value;
+                else RtlCopyMemory(target->Address, &pIn->Value, target->Size);
+            } __except (EXCEPTION_EXECUTE_HANDLER) { ret = GetExceptionCode(); goto Done; }
+
+            if (target->Address == (PVOID)(ULONG_PTR)&g_SecureMode)
+                needAntiKill = TRUE;
+
+            ret = STATUS_SUCCESS;
+Done:
+            ;
+        }
+        __finally { KeReleaseSpinLock(&g_VarTableLock, oldIrql); }
+
+        if (!NT_SUCCESS(ret)) return ret;
+
+        if (op == R0SIMULATE_VAR_OP_SET) {
+            if (reinitAltitude)  R0sUninitAllCallbacks();
+            if (reinitCallbacks) R0sInitCallbacks();
+            if (needAntiKill)    UpdateAntiKill();
+        }
+
+        if (haveOutVal && OutputSize >= sizeof(UINT64)) {
+            __try { *(UINT64*)OutputBuffer = outVal; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
+            if (Info) *Info = sizeof(UINT64);
+        }
+        return STATUS_SUCCESS;
     }
-    return status;
 }
 
 NTSTATUS R0SimulateGetKernelFunction(PVOID InputBuffer, ULONG InputSize,
