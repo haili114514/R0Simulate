@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <winternl.h>
 #include <securitybaseapi.h>
 #include "R0Simulates.h"
@@ -125,6 +126,19 @@ static void PrintCurrentUserName(void)
     CloseHandle(hToken);
 }
 
+static HANDLE volatile g_cbSyncEvt = NULL;
+static volatile LONG  g_cbSyncRun = 0;
+
+static DWORD WINAPI CbSyncDrainThread(LPVOID param)
+{
+    (void)param;
+    while (InterlockedCompareExchange(&g_cbSyncRun, 1, 1) == 1) {
+        WaitForSingleObject(g_cbSyncEvt, 100);
+        SetEvent(g_cbSyncEvt);
+    }
+    return 0;
+}
+
 int main(void)
 {
     const UINT64 tag_DEMO = 0x4F4D4544ULL;
@@ -137,8 +151,6 @@ int main(void)
         printf("[!] Driver device not found at startup. Is R0Simulate.sys loaded?\n");
         goto finish_all;
     }
-
-    
 
     printf("[1] IOCTL_R0SIMULATE_SET_INTERNAL_VARS  (R0S SIV)\n");
     {
@@ -208,8 +220,6 @@ int main(void)
         printf("\n");
     }
 
-    
-
     printf("[2] IOCTL_R0SIMULATE_EXEC_INSTRUCTION  (R0S EI)\n");
     {
         printf("  [2.1] Execute machine code: mov eax,1234; ret\n");
@@ -226,8 +236,6 @@ int main(void)
             printf("\n");
         }
     }
-
-    
 
     printf("[3] IOCTL_R0SIMULATE_CALL_KERNEL_API  (R0S API)\n");
     {
@@ -258,8 +266,6 @@ int main(void)
         }
         printf("\n");
     }
-
-    
 
     printf("[4] IOCTL_R0SIMULATE_KERNEL_MEMORY_ACCESS  (R0S KMA)\n");
     {
@@ -317,8 +323,6 @@ kma_done:
         printf("\n");
     }
 
-    
-
     printf("[5] IOCTL_R0SIMULATE_KERNEL_PROCESS_HIDING  (R0S KPH)\n");
     {
         NTSTATUS status;
@@ -343,8 +347,6 @@ kma_done:
         }
         printf("\n");
     }
-
-    
 
     printf("[6] IOCTL_R0SIMULATE_GET_SYSTEM_TOKEN  (R0S GST)\n");
     {
@@ -382,8 +384,6 @@ kma_done:
         printf("\n");
     }
 
-    
-
     printf("[7] IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION  (R0S GKF)\n");
     {
         printf("  [7.1] Lookup symbol: ExAllocatePoolWithTag\n");
@@ -399,8 +399,6 @@ kma_done:
         }
         printf("\n");
     }
-
-    
 
     printf("[8] IOCTL_R0SIMULATE_IO  (R0S IO)\n");
     {
@@ -432,8 +430,6 @@ kma_done:
         }
         printf("\n");
     }
-
-    
 
     printf("[9] IOCTL_R0SIMULATE_PREVIOUS_MODE_SWITCH  (R0S PMS)\n");
     {
@@ -479,8 +475,6 @@ kma_done:
         printf("\n");
     }
 
-    
-
     printf("[10] IOCTL_R0SIMULATE_KERNEL_OPEN_HANDLE (R0S KOH) - handle/pointer conversion\n");
     {
         ULONG pid = GetCurrentProcessId();
@@ -524,8 +518,6 @@ test10_end:
             CloseHandle(hProcess);
         printf("\n");
     }
-
-    
 
     printf("[11] IOCTL_R0SIMULATE_AUTHORIZED_LIST  (R0S AUTH)\n");
     {
@@ -604,11 +596,9 @@ test10_end:
         printf("\n");
     }
 
-    
-
     printf("[12] IOCTL_R0SIMULATE_CREATE_SYSTEM_THREAD  (R0S THREAD)\n");
     {
-        BYTE   shellcode[] = { 0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3 }; 
+        BYTE   shellcode[] = { 0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3 };
         UINT64 execAddr = 0;
         HANDLE hThread = NULL;
         BOOL   ok;
@@ -639,8 +629,9 @@ test10_end:
         }
 
         printf("  [12.3] Create system thread at that address\n");
+
         ok = R0SimulateCreateSystemThread(
-            execAddr, 0, 0, &hThread);
+            execAddr, 0, 0, NULL, &hThread);
         if (!ok)
         {
             print_last_error("R0S THREAD");
@@ -653,7 +644,6 @@ test10_end:
         }
 
 thread_free:
-        
 
         printf("  [12.4] Skip free of execAddr (avoid use-after-free of system thread)\n");
         printf("      Leaked 64 bytes in NonPagedPoolExecute - harmless\n");
@@ -666,8 +656,6 @@ thread_done:
         printf("[!] Driver went offline after [12]. Skipping remaining tests.\n");
         goto finish_all;
     }
-
-    
 
     printf("[13] IOCTL_R0SIMULATE_MSR  (R0S MSR)\n");
     {
@@ -697,11 +685,9 @@ thread_done:
         goto finish_all;
     }
 
-    
-
     printf("[14] IOCTL_R0SIMULATE_APC  (R0S APC) - synchronous kernel APC\n");
     {
-        BYTE   shellcode[] = { 0xB8, 0x2A, 0x00, 0x00, 0x00, 0xC3 }; 
+        BYTE   shellcode[] = { 0xB8, 0x2A, 0x00, 0x00, 0x00, 0xC3 };
         UINT64 execAddr = 0;
         HANDLE hEvent   = NULL;
         UINT64 result   = 0;
@@ -775,7 +761,6 @@ thread_done:
 apc_close:
         if (hEvent) CloseHandle(hEvent);
 apc_free:
-        
         printf("  [14.6] Skip free of execAddr (avoid use-after-free of APC shellcode)\n");
 apc_done:
         printf("\n");
@@ -785,8 +770,6 @@ apc_done:
         printf("[!] Driver went offline after [14]. Skipping remaining tests.\n");
         goto finish_all;
     }
-
-    
 
     printf("[15] IOCTL_R0SIMULATE_ARBITRARY_DRIVER_CALL  (R0S IRP)\n");
     {
@@ -814,6 +797,7 @@ apc_done:
         printf("      OK: DRIVER_OBJECT = 0x%016llX\n", driverObject);
 
         printf("  [15.2] Send IRP_MJ_CREATE to the driver\n");
+
         ok = R0SimulateArbitraryDriverCall(
             driverObject,
             IRP_MJ_CREATE,
@@ -823,7 +807,9 @@ apc_done:
             outData, sizeof(outData),
             &info,
             R0S_REQUESTOR_MODE_KERNEL,
-            0);
+            0,
+            NULL,
+            NULL);
         if (!ok)
         {
             print_last_error("R0S IRP CREATE");
@@ -837,6 +823,7 @@ apc_done:
         info = 0;
         memset(outData, 0, sizeof(outData));
         SetLastError(0);
+
         ok = R0SimulateArbitraryDriverCall(
             0,
             IRP_MJ_CLEANUP,
@@ -846,7 +833,9 @@ apc_done:
             outData, sizeof(outData),
             &info,
             R0S_REQUESTOR_MODE_KERNEL,
-            0);
+            0,
+            NULL,
+            NULL);
         if (!ok)
         {
             DWORD err = GetLastError();
@@ -868,34 +857,211 @@ irp_done:
         printf("\n");
     }
 
-    
-
-    printf("[16] IOCTL_R0SIMULATE_DIRECT_CREATE_DRIVER  (R0S DCD)\n");
+    printf("[16] IOCTL_R0SIMULATE_CALLBACK_CONTROL  (R0S CB)\n");
     {
-        UINT64 driverObject = 0;
-        BOOL   ok;
+        R0S_CALLBACK_CONTEXT ctx;
+        BYTE    listBuf[16 * 1024];
+        HANDLE  hNotify = NULL;
+        HANDLE  hSync   = NULL;
+        HANDLE  hDrain  = NULL;
+        ULONG   count   = 0;
+        ULONG   cbId    = R0SCB_PROCESS_CREATE;
+        UINT64  value   = 0;
+        BOOL    ok;
 
-        printf("  [16.1] Negative test: NULL init function must be rejected\n");
-        SetLastError(0);
-        ok = R0SimulateDirectCreateDriver(0, L"\\Driver\\R0SimTest", &driverObject);
-        if (!ok)
+        memset(&ctx, 0, sizeof(ctx));
+        memset(listBuf, 0, sizeof(listBuf));
+
+        hNotify = CreateEventW(NULL, TRUE,  FALSE, NULL); 
+        hSync   = CreateEventW(NULL, FALSE, TRUE,  NULL); 
+        if (!hNotify || !hSync) {
+            print_last_error("CreateEvent (CB)");
+            goto cb_done;
+        }
+
+        printf("  [16.1] LIST initial state\n");
+        ok = R0SimulateCallbackControl(
+            R0SCB_OP_LIST, 0, 0, 0, 0, 0,
+            NULL, NULL, NULL, 0,
+            listBuf, sizeof(listBuf), &count);
+        if (ok)
         {
-            DWORD err = GetLastError();
-            printf("      FAIL returned, error = 0x%08lX (%lu)\n", err, err);
-            if (err == 0xC000000D || err == ERROR_INVALID_PARAMETER)
-                printf("      PASS: NULL init function rejected as expected\n");
-            else
-                printf("      WARN: unexpected error code\n");
+            R0S_CALLBACK_CTL_OUTPUT* pOut = (R0S_CALLBACK_CTL_OUTPUT*)listBuf;
+            printf("      OK: Enabled=0x%016llX, %lu callback(s) registered\n",
+                   (unsigned long long)pOut->Enabled,
+                   (unsigned long)pOut->Count);
+            for (ULONG i = 0; i < pOut->Count && i < 8; i++)
+            {
+                printf("        TID=%p Priority=%lu CallCount=%lu Mask=0x%016llX Last=0x%llX\n",
+                       pOut->Entries[i].ThreadId,
+                       (unsigned long)pOut->Entries[i].Priority,
+                       (unsigned long)pOut->Entries[i].CallCount,
+                       (unsigned long long)pOut->Entries[i].Mask,
+                       (unsigned long long)pOut->Entries[i].LastResult);
+            }
         }
         else
         {
-            printf("      UNEXPECTED: NULL init function accepted\n");
+            print_last_error("R0S CB LIST");
         }
 
-        printf("  [16.2] (Optional) Create real driver - skipped by default\n");
-        printf("      Skipped: requires a valid kernel DriverEntry address.\n");
-        printf("      To exercise it: point InitFunction at a real kernel init routine\n");
-        printf("      and be aware the resulting DriverObject will persist.\n");
+        printf("  [16.2] ADD callback: R0SCB_PROCESS_CREATE (%lu)\n",
+               (unsigned long)cbId);
+        ok = R0SimulateCallbackControl(
+            R0SCB_OP_ADD, cbId,
+            0, 0, 0, 0,
+            hNotify, hSync,
+            &ctx, sizeof(ctx),
+            NULL, 0, NULL);
+        if (!ok)
+        {
+            print_last_error("R0S CB ADD");
+            goto cb_done;
+        }
+        printf("      OK: callback registered\n");
+
+        printf("  [16.3] GET mask\n");
+        value = 0;
+        ok = R0SimulateCallbackControl(
+            R0SCB_OP_GET, cbId,
+            0, 0, 0, R0SCB_GET_MASK,
+            NULL, NULL, NULL, 0,
+            &value, sizeof(value), NULL);
+        if (ok) printf("      OK: mask = 0x%016llX\n", (unsigned long long)value);
+        else    print_last_error("R0S CB GET mask");
+
+        printf("  [16.4] GET priority\n");
+        value = 0;
+        ok = R0SimulateCallbackControl(
+            R0SCB_OP_GET, cbId,
+            0, 0, 0, R0SCB_GET_PRIORITY,
+            NULL, NULL, NULL, 0,
+            &value, sizeof(value), NULL);
+        if (ok) printf("      OK: priority = %llu\n", (unsigned long long)value);
+        else    print_last_error("R0S CB GET priority");
+
+        printf("  [16.5] GET callcount (before trigger)\n");
+        value = 0;
+        ok = R0SimulateCallbackControl(
+            R0SCB_OP_GET, cbId,
+            0, 0, 0, R0SCB_GET_CALLCOUNT,
+            NULL, NULL, NULL, 0,
+            &value, sizeof(value), NULL);
+        if (ok) printf("      OK: callcount = %llu\n", (unsigned long long)value);
+        else    print_last_error("R0S CB GET callcount");
+
+        printf("  [16.6] SET mask=~0, priority=10\n");
+        ok = R0SimulateCallbackControl(
+            R0SCB_OP_SET, cbId,
+            ~0ULL, 10,
+            R0SCB_SET_FLAG_MASK | R0SCB_SET_FLAG_PRIORITY,
+            0,
+            NULL, NULL, NULL, 0,
+            NULL, 0, NULL);
+        if (ok) printf("      OK: SET applied\n");
+        else    print_last_error("R0S CB SET");
+
+        printf("  [16.7] Trigger: CreateProcessW (cmd.exe /c exit 0)\n");
+
+        g_cbSyncEvt = hSync;
+        InterlockedExchange(&g_cbSyncRun, 1);
+        hDrain = CreateThread(NULL, 0, CbSyncDrainThread, NULL, 0, NULL);
+        if (!hDrain)
+            print_last_error("CreateThread (drain)");
+
+        SetEvent(hSync);
+
+        {
+            STARTUPINFOW si = { sizeof(si) };
+            PROCESS_INFORMATION pi = { 0 };
+            WCHAR cmdLine[] = L"cmd.exe /c exit 0";
+
+            if (!CreateProcessW(NULL, cmdLine, NULL, NULL, FALSE,
+                                CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
+            {
+                print_last_error("CreateProcessW");
+            }
+            else
+            {
+                BOOL gotNotify = FALSE;
+                for (int i = 0; i < 30; i++)
+                {
+                    DWORD wr = WaitForSingleObject(hNotify, 100);
+                    if (wr == WAIT_OBJECT_0) {
+                        gotNotify = TRUE;
+                        ResetEvent(hNotify);
+                        break;
+                    }
+                }
+                if (gotNotify)
+                {
+                    printf("      OK: notify received\n");
+                    printf("        ctx.CallbackIndex = %lu\n",
+                           (unsigned long)ctx.CallbackIndex);
+                    printf("        ctx.Status        = 0x%08X\n",
+                           (unsigned int)ctx.Status);
+                    if (ctx.CallbackIndex == cbId)
+                        printf("      PASS: callback index matches\n");
+                    else
+                        printf("      WARN: unexpected callback index\n");
+                }
+                else
+                {
+                    printf("      WARN: notify timeout (driver may not deliver on this path)\n");
+                }
+
+                WaitForSingleObject(pi.hProcess, 3000);
+                CloseHandle(pi.hProcess);
+                CloseHandle(pi.hThread);
+            }
+        }
+
+        InterlockedExchange(&g_cbSyncRun, 0);
+        if (hDrain) { WaitForSingleObject(hDrain, 1000); CloseHandle(hDrain); hDrain = NULL; }
+        g_cbSyncEvt = NULL;
+
+        printf("  [16.8] GET callcount (after trigger)\n");
+        value = 0;
+        ok = R0SimulateCallbackControl(
+            R0SCB_OP_GET, cbId,
+            0, 0, 0, R0SCB_GET_CALLCOUNT,
+            NULL, NULL, NULL, 0,
+            &value, sizeof(value), NULL);
+        if (ok) printf("      OK: callcount = %llu\n", (unsigned long long)value);
+        else    print_last_error("R0S CB GET callcount after");
+
+        printf("  [16.9] REMOVE callback\n");
+        ok = R0SimulateCallbackControl(
+            R0SCB_OP_REMOVE, cbId,
+            0, 0, 0, 0,
+            NULL, NULL, NULL, 0,
+            NULL, 0, NULL);
+        if (ok) printf("      OK: removed\n");
+        else    print_last_error("R0S CB REMOVE");
+
+        printf("  [16.10] LIST after remove\n");
+        memset(listBuf, 0, sizeof(listBuf));
+        count = 0;
+        ok = R0SimulateCallbackControl(
+            R0SCB_OP_LIST, 0, 0, 0, 0, 0,
+            NULL, NULL, NULL, 0,
+            listBuf, sizeof(listBuf), &count);
+        if (ok)
+        {
+            R0S_CALLBACK_CTL_OUTPUT* pOut = (R0S_CALLBACK_CTL_OUTPUT*)listBuf;
+            printf("      OK: %lu callback(s) remain\n", (unsigned long)pOut->Count);
+        }
+        else
+        {
+            print_last_error("R0S CB LIST (after remove)");
+        }
+
+cb_done:
+        if (hDrain)  CloseHandle(hDrain);
+        if (hNotify) CloseHandle(hNotify);
+        if (hSync)   CloseHandle(hSync);
+        g_cbSyncEvt = NULL;
+        InterlockedExchange(&g_cbSyncRun, 0);
         printf("\n");
     }
 
