@@ -203,10 +203,6 @@ R0SIMULATES_API UINT64 R0SimulateAPI(const WCHAR* pwszApiName, ULONG argc, ULONG
             return 0;
         }
         nameLen = (ULONG)((my_wcslen(pwszApiName) + 1) * sizeof(WCHAR));
-        if (nameLen == 0 || nameLen > 512) {
-            RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
-            return 0;
-        }
         totalInSize = sizeof(CALL_KERNEL_API_INPUT) + nameLen;
     }
 
@@ -464,10 +460,6 @@ R0SIMULATES_API BOOL R0SimulateKernelMemoryAccess(UINT64 Address, ULONG Offset, 
         RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
-    if (Length > 0x1000000) {
-        RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
-        return FALSE;
-    }
     if (Operation != R0SKMA_OP_READ && Operation != R0SKMA_OP_WRITE) {
         RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
         return FALSE;
@@ -557,10 +549,6 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
             return FALSE;
         }
         nameLen = (ULONG)((my_wcslen(pName) + 1) * sizeof(WCHAR));
-        if (nameLen == 0 || nameLen > 512) {
-            RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
-            return FALSE;
-        }
     }
 
     if (Operation != R0SIMULATE_VAR_OP_GET &&
@@ -655,10 +643,6 @@ R0SIMULATES_API BOOL R0SimulateGetKernelFunction(
     totalInSize = sizeof(GET_KERNEL_FUNCTION_INPUT);
     if (FunctionName) {
         nameLen = (ULONG)((my_wcslen(FunctionName) + 1) * sizeof(WCHAR));
-        if (nameLen > 512) {
-            RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
-            return FALSE;
-        }
         totalInSize += nameLen - 1;
     }
 
