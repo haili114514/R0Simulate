@@ -34,8 +34,10 @@ extern "C" {
 #define R0S_IOCTL_COUNT   (R0S_IOCTL_LAST + 1)
 
 // ----- Flags -----
-#define R0SIMULATE_FLAG_USE_ADDRESS  0x00000001
-#define R0SIMULATE_FLAG_SSN_MODE     0x00000002
+#define R0SIMULATE_MODE_NAME         0x00000000
+#define R0SIMULATE_MODE_ADDRESS      0x00000001
+#define R0SIMULATE_MODE_SSN          0x00000002
+#define R0SIMULATE_MODE_MODULE       0x00000003
 
 // ----- Previous Mode -----
 #define R0SPMS_MODE_KERNEL  0x00

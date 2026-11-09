@@ -156,10 +156,10 @@ R0SIMULATES_API UINT64 R0SimulateISA(const void* pInstruction, ULONG instruction
 
 R0SIMULATES_API UINT64 R0SimulateAPI(const WCHAR* pwszApiName, ULONG argc, ULONG flags, ...) {
     UINT64 result = 0;
-    BOOL useAddress, useSsn;
-    ULONG nameLen = 0;
+    ULONG  mode;
+    ULONG  nameLen = 0;
     size_t totalInSize;
-    WCHAR ssnStr[32] = {0};
+    WCHAR  ssnStr[32] = {0};
     PCALL_KERNEL_API_INPUT pIn;
     CALL_KERNEL_API_OUTPUT out;
     IO_STATUS_BLOCK ioStatus;
@@ -171,16 +171,15 @@ R0SIMULATES_API UINT64 R0SimulateAPI(const WCHAR* pwszApiName, ULONG argc, ULONG
         RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
         return 0;
     }
-    useAddress = (flags & R0SIMULATE_FLAG_USE_ADDRESS) ? TRUE : FALSE;
-    useSsn = (flags & R0SIMULATE_FLAG_SSN_MODE) ? TRUE : FALSE;
-    if (useAddress && useSsn) {
-        RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
-        return 0;
-    }
 
-    if (useAddress) {
+    mode = flags & 0x03;
+
+    if (mode == R0SIMULATE_MODE_ADDRESS) {
+
         totalInSize = sizeof(CALL_KERNEL_API_INPUT) + sizeof(UINT64);
-    } else if (useSsn) {
+    }
+    else if (mode == R0SIMULATE_MODE_SSN) {
+
         ULONG ssn = (ULONG)(ULONG_PTR)pwszApiName;
         int idx = 0;
         if (ssn == 0) {
@@ -197,7 +196,9 @@ R0SIMULATES_API UINT64 R0SimulateAPI(const WCHAR* pwszApiName, ULONG argc, ULONG
         ssnStr[idx] = L'\0';
         nameLen = (ULONG)((idx + 1) * sizeof(WCHAR));
         totalInSize = sizeof(CALL_KERNEL_API_INPUT) + nameLen;
-    } else {
+    }
+    else {
+
         if (!pwszApiName) {
             RtlSetLastWin32Error(ERROR_INVALID_PARAMETER);
             return 0;
@@ -211,14 +212,14 @@ R0SIMULATES_API UINT64 R0SimulateAPI(const WCHAR* pwszApiName, ULONG argc, ULONG
         RtlSetLastWin32Error(ERROR_OUTOFMEMORY);
         return 0;
     }
-    pIn->ApiNameLength = useAddress ? 0 : nameLen;
+    pIn->ApiNameLength = (mode == R0SIMULATE_MODE_ADDRESS) ? 0 : nameLen;
     pIn->ArgumentCount = argc;
-    pIn->Flags = flags;
+    pIn->Flags         = flags;
 
-    if (useAddress) {
+    if (mode == R0SIMULATE_MODE_ADDRESS) {
         UINT64 addr = (UINT64)(ULONG_PTR)pwszApiName;
         memcpy(pIn->ApiName, &addr, sizeof(addr));
-    } else if (useSsn) {
+    } else if (mode == R0SIMULATE_MODE_SSN) {
         memcpy(pIn->ApiName, ssnStr, nameLen);
     } else {
         memcpy(pIn->ApiName, pwszApiName, nameLen);

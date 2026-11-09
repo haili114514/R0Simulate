@@ -65,7 +65,11 @@ typedef VOID (NTAPI *PKNORMAL_ROUTINE)(PVOID NormalContext,
       R0S_IOCTL_FUNCTION_OF(code) <  R0S_IOCTL_LIMIT) \
         ? (R0S_IOCTL_FUNCTION_OF(code) - R0S_IOCTL_BASE) : 0xFFFFFFFFUL)
 
-#define R0SIMULATE_FLAG_USE_ADDRESS  0x00000001
+#define R0SIMULATE_MODE_NAME         0x00000000
+#define R0SIMULATE_MODE_ADDRESS      0x00000001
+#define R0SIMULATE_MODE_SSN          0x00000002
+#define R0SIMULATE_MODE_MODULE       0x00000003
+
 #define R0S_MASK_TEST(m, idx) \
     (((idx) < R0S_IOCTL_COUNT) ? (((m) >> (idx)) & 1ULL) : 0ULL)
 #define R0S_MASK_PRIVILEGED   (~0ULL)
@@ -608,7 +612,7 @@ static UINT64       g_AuthDefaultMask = 0;
 static LIST_ENTRY   g_AuthListHead;
 static KSPIN_LOCK   g_AuthListLock;
 static ULONG g_VersionMajor    = 4;
-static ULONG g_VersionMinor    = 0;
+static ULONG g_VersionMinor    = 1;
 static ULONG g_VersionBuild    = 0;
 static ULONG g_VersionRevision = 0;
 static LIST_ENTRY   g_Win32kSsdtListHead;
@@ -2697,6 +2701,129 @@ static PWIN32U_MAP ParseWin32uExports(PVOID base, PULONG pCount)
     return map;
 }
 
+static BOOLEAN R0sNameEqAI(const char* a, const WCHAR* b)
+{
+    if (!a || !b) return FALSE;
+    for (ULONG i = 0; ; i++) {
+        WCHAR wc = b[i];
+        char  cc = a[i];
+        if (wc >= L'A' && wc <= L'Z') wc = (WCHAR)(wc + 32);
+        if (cc >= 'A' && cc <= 'Z')   cc = (char)(cc + 32);
+        if (wc != (WCHAR)cc) return FALSE;
+        if (wc == 0) return TRUE;
+    }
+}
+
+static PVOID R0sFindExportInModule(PVOID moduleBase, ULONG moduleSize, const WCHAR* funcName)
+{
+    PVOID result = NULL;
+    __try {
+        IMAGE_DOS_HEADER       dos;
+        IMAGE_NT_HEADERS64     nt;
+        IMAGE_DATA_DIRECTORY   expDir;
+        IMAGE_EXPORT_DIRECTORY exp;
+        ULONG*  names;
+        USHORT* ords;
+        ULONG*  funcs;
+        ULONG   i;
+        int     k;
+
+        if (!moduleBase || !funcName) return NULL;
+        if (!SafeReadMemory(moduleBase, &dos, sizeof(dos)) ||
+            dos.e_magic != IMAGE_DOS_SIGNATURE) return NULL;
+        if (!SafeReadMemory((PUCHAR)moduleBase + dos.e_lfanew, &nt, sizeof(nt)) ||
+            nt.Signature != IMAGE_NT_SIGNATURE) return NULL;
+
+        expDir = nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+        if (!expDir.VirtualAddress || !expDir.Size) return NULL;
+        if (expDir.VirtualAddress + expDir.Size > moduleSize) return NULL;
+        if (!SafeReadMemory((PUCHAR)moduleBase + expDir.VirtualAddress,
+                            &exp, sizeof(exp))) return NULL;
+
+        if (exp.AddressOfNames + exp.NumberOfNames * 4 > moduleSize ||
+            exp.AddressOfFunctions + exp.NumberOfFunctions * 4 > moduleSize ||
+            exp.AddressOfNameOrdinals + exp.NumberOfNames * 2 > moduleSize) return NULL;
+
+        names = (ULONG*)((PUCHAR)moduleBase + exp.AddressOfNames);
+        ords  = (USHORT*)((PUCHAR)moduleBase + exp.AddressOfNameOrdinals);
+        funcs = (ULONG*)((PUCHAR)moduleBase + exp.AddressOfFunctions);
+
+        for (i = 0; i < exp.NumberOfNames; i++) {
+            ULONG  nameRVA;
+            char   ansi[128] = {0};
+            USHORT ord;
+            ULONG  funcRVA;
+
+            if (!SafeReadMemory(&names[i], &nameRVA, sizeof(nameRVA))) break;
+            if (nameRVA >= moduleSize) continue;
+            for (k = 0; k < 127; k++) {
+                char c;
+                if (!SafeReadMemory((PUCHAR)moduleBase + nameRVA + k, &c, 1)) break;
+                if (c == 0) { ansi[k] = 0; break; }
+                ansi[k] = c;
+            }
+            if (!R0sNameEqAI(ansi, funcName)) continue;
+            if (!SafeReadMemory(&ords[i], &ord, sizeof(ord))) break;
+            if (!SafeReadMemory(&funcs[ord], &funcRVA, sizeof(funcRVA))) break;
+            result = (PUCHAR)moduleBase + funcRVA;
+            break;
+        }
+    } __except(EXCEPTION_EXECUTE_HANDLER) { result = NULL; }
+    return result;
+}
+
+static PVOID R0sLookupKernelModuleExport(const WCHAR* fullName, ULONG maxChars)
+{
+    PVOID    result = NULL;
+    PVOID    buffer = NULL;
+    ULONG    bufSize = 0x20000;
+    NTSTATUS st;
+    WCHAR    modName[64];
+    ULONG    modLen = 0;
+    const WCHAR* fn;
+
+    __try {
+        if (!fullName || maxChars == 0) return NULL;
+
+        while (modLen < maxChars && modLen < 63 &&
+               fullName[modLen] && fullName[modLen] != L':')
+            modLen++;
+
+        if (modLen == 0 || modLen >= maxChars || fullName[modLen] != L':' ||
+            modLen + 1 >= maxChars || !fullName[modLen + 1])
+            return NULL;
+
+        for (ULONG i = 0; i < modLen; i++) modName[i] = fullName[i];
+        modName[modLen] = L'\0';
+        fn = fullName + modLen + 1;
+
+        st = ZwQuerySystemInformation(11, NULL, 0, &bufSize);
+        if (bufSize < 0x20000) bufSize = 0x20000;
+
+        buffer = ExAllocatePoolWithTag(NonPagedPool, bufSize, 'MDB0');
+        if (!buffer) return NULL;
+
+        st = ZwQuerySystemInformation(11, buffer, bufSize, NULL);
+        if (!NT_SUCCESS(st)) { ExFreePoolWithTag(buffer, 'MDB0'); return NULL; }
+
+        {
+            PSYSTEM_MODULE_INFORMATION info = (PSYSTEM_MODULE_INFORMATION)buffer;
+            for (ULONG i = 0; i < info->Count; i++) {
+                PSYSTEM_MODULE_ENTRY e = &info->Module[i];
+                const char* baseName = (const char*)e->FullPathName + e->OffsetToFileName;
+                if (R0sNameEqAI(baseName, modName)) {
+                    result = R0sFindExportInModule(e->ImageBase, e->ImageSize, fn);
+                    break;
+                }
+            }
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) { result = NULL; }
+
+    if (buffer) ExFreePoolWithTag(buffer, 'MDB0');
+    return result;
+}
+
 NTSTATUS BuildWin32kSsdtTable(VOID)
 {
     NTSTATUS status = STATUS_SUCCESS;
@@ -3090,7 +3217,7 @@ NTSTATUS R0SimulateCallKernelApiIoctl(PVOID InputBuffer, ULONG InputSize,
     __try {
         apiInput = (PCALL_KERNEL_API_INPUT)InputBuffer;
 
-        if (!(apiInput->Flags & R0SIMULATE_FLAG_USE_ADDRESS)) {
+        if ((apiInput->Flags & 0x03) != R0SIMULATE_MODE_ADDRESS) {
             if (apiInput->ApiNameLength == 0 || apiInput->ApiNameLength > 512 ||
                 InputSize < sizeof(CALL_KERNEL_API_INPUT) + apiInput->ApiNameLength) {
                 return STATUS_INVALID_PARAMETER;
@@ -3098,15 +3225,29 @@ NTSTATUS R0SimulateCallKernelApiIoctl(PVOID InputBuffer, ULONG InputSize,
             if (apiInput->ApiNameLength % 2 != 0) return STATUS_INVALID_PARAMETER;
         }
 
-        if (apiInput->Flags & R0SIMULATE_FLAG_USE_ADDRESS) {
+        if ((apiInput->Flags & 0x03) == R0SIMULATE_MODE_ADDRESS) {
             UINT64 addr = 0;
             RtlCopyMemory(&addr, apiInput->ApiName, sizeof(addr));
             apiAddress = (PVOID)(ULONG_PTR)addr;
         }
         else {
             const WCHAR* name = apiInput->ApiName;
+            const WCHAR* q;
+            BOOLEAN hasColon = FALSE;
 
-            if (g_FunctionLookupMode == 2 || g_FunctionLookupMode == 3) {
+            for (q = name; *q; q++) {
+                if (*q == L':') {
+                    hasColon = (q != name && *(q + 1) != L'\0');
+                    break;
+                }
+            }
+
+            if (hasColon) {
+                apiAddress = R0sLookupKernelModuleExport(
+                                 name, apiInput->ApiNameLength / sizeof(WCHAR));
+                if (!apiAddress) status = STATUS_PROCEDURE_NOT_FOUND;
+            }
+            else if (g_FunctionLookupMode == 2 || g_FunctionLookupMode == 3) {
                 BOOLEAN useWin32k = (g_FunctionLookupMode == 3);
 
                 if (IsNumberString(name)) {
@@ -3215,7 +3356,8 @@ NTSTATUS R0SimulateCallKernelApiIoctl(PVOID InputBuffer, ULONG InputSize,
         }
 
         if (NT_SUCCESS(status)) {
-            status = R0SimulateAPI(apiAddress, apiInput->ArgumentCount, apiInput->Arguments, &returnValue);
+            status = R0SimulateAPI(apiAddress, apiInput->ArgumentCount,
+                                   apiInput->Arguments, &returnValue);
             output = (PCALL_KERNEL_API_OUTPUT)OutputBuffer;
             output->ReturnValue = returnValue;
             output->Status      = status;
@@ -5528,7 +5670,7 @@ static VOID R0S_LogIn(ULONG code, ULONG idx, PVOID inputBuffer, ULONG inputSize)
                     { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
                 PCALL_KERNEL_API_INPUT p = (PCALL_KERNEL_API_INPUT)inputBuffer;
                 WCHAR name[64] = {0};
-                if (!(p->Flags & R0SIMULATE_FLAG_USE_ADDRESS) &&
+                if ((p->Flags & 0x03) != R0SIMULATE_MODE_ADDRESS &&
                     p->ApiNameLength > 0 && p->ApiNameLength <= 512 &&
                     inputSize >= sizeof(CALL_KERNEL_API_INPUT) + p->ApiNameLength) {
                     ULONG n = p->ApiNameLength / sizeof(WCHAR);
