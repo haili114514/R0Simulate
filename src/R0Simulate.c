@@ -668,7 +668,7 @@ NTKERNELAPI NTSTATUS CmRegisterCallbackEx(PEX_CALLBACK_FUNCTION Function,
                                           PVOID Reserved);
 
 NTSTATUS DriverEntry(PDRIVER_OBJECT, PUNICODE_STRING);
-VOID     DriverUnload(PDRIVER_OBJECT);
+NTSTATUS DriverUnload(PDRIVER_OBJECT);
 NTSTATUS DriverCreateClose(PDEVICE_OBJECT, PIRP);
 NTSTATUS DriverDeviceControl(PDEVICE_OBJECT, PIRP);
 
@@ -1034,6 +1034,18 @@ static VOID RegisterAllVariables(VOID)
         WCHAR name[40];
         R0sBuildIndexedName(name, 40, L"g_IoctlHandler[", i, L"]");
         R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_IoctlHandler[i], name, NULL);
+    }
+
+    if (g_DriverObject != NULL) {
+        __try {
+            R0sRegisterVariable(sizeof(PVOID),
+                                (PVOID)(ULONG_PTR)&g_DriverObject->DriverSection,
+                                L"g_DriverSection", NULL);
+
+            R0sRegisterVariable(sizeof(PVOID),
+                                (PVOID)(ULONG_PTR)&g_DriverObject->DriverUnload,
+                                L"g_DriverUnload", NULL);
+        } __except(EXCEPTION_EXECUTE_HANDLER) { }
     }
 
     R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_DebugMode,       L"g_DebugMode",       NULL);
@@ -2954,37 +2966,45 @@ NTSTATUS InitDynamicOffsets(VOID)
 
         {
             UCHAR patternPsGetPid[] = {0x48, 0x8B, 0x81};
-            if (!FindPatternOffset((PVOID)PsGetProcessId, 0x200,
+            if (!FindPatternOffset((PVOID)PsGetProcessId, 0x1200,
                                    patternPsGetPid, sizeof(patternPsGetPid), &offset)) {
-                status = STATUS_NOT_FOUND;
-                __leave;
+                g_ActiveProcessLinksOffset = 0;
+                g_IoctlDisable |= (1ULL << IOCTL_INDEX_PROCESS_HIDING);
+            } else {
+                g_ActiveProcessLinksOffset = offset + 0x08;
             }
-            g_ActiveProcessLinksOffset = offset + 0x08;
         }
 
         {
             UCHAR patternExGetPrevMode[] = {0x0F, 0xB6, 0x80};
-            if (!FindPatternOffset((PVOID)ExGetPreviousMode, 0x200,
+            if (!FindPatternOffset((PVOID)ExGetPreviousMode, 0x1200,
                                    patternExGetPrevMode, sizeof(patternExGetPrevMode), &offset)) {
-                status = STATUS_NOT_FOUND;
-                __leave;
+                g_PreviousModeOffset = 0;
+                g_IoctlDisable |= (1ULL << IOCTL_INDEX_PREVIOUS_MODE_SWITCH);
+            } else {
+                g_PreviousModeOffset = offset;
             }
-            g_PreviousModeOffset = offset;
         }
-
-        if (pSystem) {
-            UCHAR* base = (UCHAR*)pSystem;
-            ULONG i;
-            __try {
-                for (i = 0; i < 0x600 - 1; i++) {
-                    if (base[i] == 0xD0 && base[i+1] == 0x00) {
-                        g_PrimaryTokenFrozenOffset = i;
-                        break;
+        {
+            BOOLEAN found = FALSE;
+            g_PrimaryTokenFrozenOffset = 0;
+            if (pSystem) {
+                UCHAR* base = (UCHAR*)pSystem;
+                ULONG i;
+                __try {
+                    for (i = 0; i < 0x1200 - 1; i++) {
+                        if (base[i] == 0xD0 && base[i+1] == 0x00) {
+                            g_PrimaryTokenFrozenOffset = i;
+                            found = TRUE;
+                            break;
+                        }
                     }
-                }
-            } __except(EXCEPTION_EXECUTE_HANDLER) { status = GetExceptionCode(); __leave; }
+                } __except(EXCEPTION_EXECUTE_HANDLER) { found = FALSE; }
+            }
+            if (!found) {
+                g_IoctlDisable |= (1ULL << IOCTL_INDEX_GET_SYSTEM_TOKEN);
+            }
         }
-        if (g_PrimaryTokenFrozenOffset == 0) { status = STATUS_NOT_FOUND; __leave; }
 
         status = STATUS_SUCCESS;
     }
@@ -5656,13 +5676,30 @@ static VOID R0S_LogIn(ULONG code, ULONG idx, PVOID inputBuffer, ULONG inputSize)
     __try {
         switch (idx) {
             case IOCTL_INDEX_EXEC_INSTRUCTION: {
+                PEXEC_INSTRUCTION_INPUT p;
+                static const char H[] = "0123456789ABCDEF";
+                char hex[3 * 64 + 1];
+                ULONG i, off, chunk;
+
                 if (!inputBuffer || inputSize < sizeof(EXEC_INSTRUCTION_INPUT))
-                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
-                PEXEC_INSTRUCTION_INPUT p = (PEXEC_INSTRUCTION_INPUT)inputBuffer;
-                DbgPrint("R0S IN  tid=%p pid=%p func=%s size=%u b0=%02X%02X%02X%02X\n",
-                         tid, pid, fn, p->InstructionSize,
-                         p->Instruction[0], p->Instruction[1],
-                         p->Instruction[2], p->Instruction[3]);
+                        { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                p = (PEXEC_INSTRUCTION_INPUT)inputBuffer;
+
+                DbgPrint("R0S IN  tid=%p pid=%p func=%s size=%u\n",
+                         tid, pid, fn, p->InstructionSize);
+
+                for (off = 0; off < p->InstructionSize; off += 64) {
+                    chunk = p->InstructionSize - off;
+                    if (chunk > 64) chunk = 64;
+                    for (i = 0; i < chunk; i++) {
+                        UCHAR b = p->Instruction[off + i];
+                        hex[i * 3 + 0] = H[b >> 4];
+                        hex[i * 3 + 1] = H[b & 0xF];
+                        hex[i * 3 + 2] = ' ';
+                    }
+                    hex[chunk * 3] = 0;
+                    DbgPrint("  %s\n", hex);
+                }
                 break;
             }
             case IOCTL_INDEX_CALL_KERNEL_API: {
@@ -6182,33 +6219,14 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DriverDeviceControl;
         DriverObject->DriverUnload                         = DriverUnload;
 
-        InitializeListHead(&g_HiddenListHead);
-        KeInitializeSpinLock(&g_HiddenListLock);
-        InitializeListHead(&g_FunctionTableHead);
-        KeInitializeSpinLock(&g_FunctionTableLock);
-        g_FunctionTableBuilt = FALSE;
-        InitializeListHead(&g_SsdtListHead);
-        KeInitializeSpinLock(&g_SsdtListLock);
-        g_SsdtBuilt = FALSE;
-
-        InitializeListHead(&g_Win32kSsdtListHead);
-        KeInitializeSpinLock(&g_Win32kSsdtListLock);
-        g_Win32kSsdtBuilt = FALSE;
-        g_SsnTableSelect  = 0;
-
-        InitializeListHead(&g_VarTableHead);
-        KeInitializeSpinLock(&g_VarTableLock);
-        g_VarNextId = 1;
-
-        InitializeListHead(&g_AuthListHead);
-        KeInitializeSpinLock(&g_AuthListLock);
-        g_AuthMode = 0;
-        g_AuthDefaultMask = 0;
-
+        InitializeListHead(&g_HiddenListHead);        KeInitializeSpinLock(&g_HiddenListLock);
+        InitializeListHead(&g_FunctionTableHead);     KeInitializeSpinLock(&g_FunctionTableLock);
+        InitializeListHead(&g_SsdtListHead);          KeInitializeSpinLock(&g_SsdtListLock);
+        InitializeListHead(&g_Win32kSsdtListHead);    KeInitializeSpinLock(&g_Win32kSsdtListLock);
+        InitializeListHead(&g_VarTableHead);          KeInitializeSpinLock(&g_VarTableLock);
+        InitializeListHead(&g_AuthListHead);          KeInitializeSpinLock(&g_AuthListLock);
+        InitializeListHead(&g_CallbackEntryListHead); KeInitializeSpinLock(&g_CallbackEntryLock);
         KeInitializeSpinLock(&g_RateLock);
-
-        InitializeListHead(&g_CallbackEntryListHead);
-        KeInitializeSpinLock(&g_CallbackEntryLock);
 
         RegisterAllVariables();
         R0sInitCallbacks();
@@ -6231,7 +6249,7 @@ Exit:
     return status;
 }
 
-VOID DriverUnload(PDRIVER_OBJECT DriverObject)
+NTSTATUS DriverUnload(PDRIVER_OBJECT DriverObject)
 {
     KIRQL oldIrql;
     PLIST_ENTRY pList, pNext;
@@ -6244,12 +6262,21 @@ VOID DriverUnload(PDRIVER_OBJECT DriverObject)
 
     UNREFERENCED_PARAMETER(DriverObject);
 
+    if (g_SecureMode & 0x8000) {
+        if (g_DebugMode & 0x0000400000000000ULL) {
+            DbgPrint("R0S: DriverUnload rejected STATUS_ACCESS_DENIED, "
+                     "SecureMode=0x%I64X caller=%p\n",
+                     g_SecureMode, _ReturnAddress());
+        }
+        return STATUS_ACCESS_DENIED;
+    }
+
     InterlockedExchange(&g_ShuttingDown, 1);
     InterlockedExchange64((volatile LONG64*)&g_R0CallbackControl, 0);
 
     R0sUninitAllCallbacks();
 
-    interval.QuadPart = -10000LL * 100;   
+    interval.QuadPart = -10000LL * 100;
 
     for (i = 0; i < 60 && g_InCallbackCount > 0; i++) {
         KeDelayExecutionThread(KernelMode, FALSE, &interval);
@@ -6360,6 +6387,8 @@ VOID DriverUnload(PDRIVER_OBJECT DriverObject)
         DbgPrint("R0S: DriverUnload status=0x%08X uptime=%I64u\n",
                  STATUS_SUCCESS,
                  (UINT64)KeQueryInterruptTime());
+
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS DriverCreateClose(PDEVICE_OBJECT DeviceObject, PIRP Irp)
