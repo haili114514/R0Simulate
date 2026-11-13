@@ -3228,7 +3228,7 @@ NTSTATUS R0SimulateCallKernelApiIoctl(PVOID InputBuffer, ULONG InputSize,
     PCALL_KERNEL_API_OUTPUT output;
     PVOID apiAddress = NULL;
     UINT64 returnValue = 0;
-
+    ULONG mode;
     if (!InputBuffer || InputSize < sizeof(CALL_KERNEL_API_INPUT))
         return STATUS_INVALID_PARAMETER;
     if (!OutputBuffer || OutputSize < sizeof(CALL_KERNEL_API_OUTPUT))
@@ -3237,7 +3237,9 @@ NTSTATUS R0SimulateCallKernelApiIoctl(PVOID InputBuffer, ULONG InputSize,
     __try {
         apiInput = (PCALL_KERNEL_API_INPUT)InputBuffer;
 
-        if ((apiInput->Flags & 0x03) != R0SIMULATE_MODE_ADDRESS) {
+        mode = apiInput->Flags & 0x03;
+
+        if (mode != R0SIMULATE_MODE_ADDRESS) {
             if (apiInput->ApiNameLength == 0 || apiInput->ApiNameLength > 512 ||
                 InputSize < sizeof(CALL_KERNEL_API_INPUT) + apiInput->ApiNameLength) {
                 return STATUS_INVALID_PARAMETER;
@@ -3245,29 +3247,22 @@ NTSTATUS R0SimulateCallKernelApiIoctl(PVOID InputBuffer, ULONG InputSize,
             if (apiInput->ApiNameLength % 2 != 0) return STATUS_INVALID_PARAMETER;
         }
 
-        if ((apiInput->Flags & 0x03) == R0SIMULATE_MODE_ADDRESS) {
+        if (mode == R0SIMULATE_MODE_ADDRESS) {
+
             UINT64 addr = 0;
             RtlCopyMemory(&addr, apiInput->ApiName, sizeof(addr));
             apiAddress = (PVOID)(ULONG_PTR)addr;
         }
+        else if (mode == R0SIMULATE_MODE_MODULE) {
+
+            apiAddress = R0sLookupKernelModuleExport(
+                             apiInput->ApiName,
+                             apiInput->ApiNameLength / sizeof(WCHAR));
+            if (!apiAddress) status = STATUS_PROCEDURE_NOT_FOUND;
+        }
         else {
             const WCHAR* name = apiInput->ApiName;
-            const WCHAR* q;
-            BOOLEAN hasColon = FALSE;
-
-            for (q = name; *q; q++) {
-                if (*q == L':') {
-                    hasColon = (q != name && *(q + 1) != L'\0');
-                    break;
-                }
-            }
-
-            if (hasColon) {
-                apiAddress = R0sLookupKernelModuleExport(
-                                 name, apiInput->ApiNameLength / sizeof(WCHAR));
-                if (!apiAddress) status = STATUS_PROCEDURE_NOT_FOUND;
-            }
-            else if (g_FunctionLookupMode == 2 || g_FunctionLookupMode == 3) {
+            if (g_FunctionLookupMode == 2 || g_FunctionLookupMode == 3) {
                 BOOLEAN useWin32k = (g_FunctionLookupMode == 3);
 
                 if (IsNumberString(name)) {
@@ -3374,7 +3369,6 @@ NTSTATUS R0SimulateCallKernelApiIoctl(PVOID InputBuffer, ULONG InputSize,
                 if (!apiAddress) status = STATUS_NOT_FOUND;
             }
         }
-
         if (NT_SUCCESS(status)) {
             status = R0SimulateAPI(apiAddress, apiInput->ArgumentCount,
                                    apiInput->Arguments, &returnValue);
