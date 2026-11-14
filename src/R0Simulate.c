@@ -930,8 +930,10 @@ R0S_INTERNAL NTSTATUS R0sRegisterVariable(ULONG Size, PVOID Address, const WCHAR
 
 R0S_INTERNAL PVAR_TABLE_ENTRY FindVarById(ULONG Id)
 {
-    PVAR_TABLE_ENTRY found = NULL;
+    if (!R0sIsIoctlAuthorized(IOCTL_INDEX_SET_INTERNAL_VARS))
+        return NULL;
 
+    PVAR_TABLE_ENTRY found = NULL;
     __try {
         PLIST_ENTRY p = g_VarTableHead.Flink;
         while (p != &g_VarTableHead) {
@@ -946,6 +948,9 @@ R0S_INTERNAL PVAR_TABLE_ENTRY FindVarById(ULONG Id)
 
 R0S_INTERNAL PVAR_TABLE_ENTRY FindVarByName(const WCHAR* Name, ULONG NameChars)
 {
+    if (!R0sIsIoctlAuthorized(IOCTL_INDEX_SET_INTERNAL_VARS))
+        return NULL;
+
     WCHAR             nameBuf[64];
     ULONG             copyChars;
     BOOLEAN           copyOk = FALSE;
