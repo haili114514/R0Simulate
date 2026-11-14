@@ -6242,8 +6242,10 @@ R0S_INTERNAL NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING R
 
 Exit:
     if (g_DebugMode & 0x0000800000000000ULL)
-        DbgPrint("R0S: DriverEntry status=0x%08X start=%I64u\n",
-                 status, g_StartTime);
+        DbgPrint("R0S: DriverEntry status=0x%08X start=%I64u tid=%p pid=%p\n",
+                 status, g_StartTime,
+                 PsGetCurrentThreadId(),
+                 PsGetCurrentProcessId());
     return status;
 }
 
@@ -6263,8 +6265,10 @@ R0S_INTERNAL NTSTATUS DriverUnload(PDRIVER_OBJECT DriverObject)
     if (g_SecureMode & 0x8000) {
         if (g_DebugMode & 0x0000400000000000ULL) {
             DbgPrint("R0S: DriverUnload rejected STATUS_ACCESS_DENIED, "
-                     "SecureMode=0x%I64X caller=%p\n",
-                     g_SecureMode, _ReturnAddress());
+                     "SecureMode=0x%I64X caller=%p tid=%p pid=%p\n",
+                     g_SecureMode, _ReturnAddress(),
+                     PsGetCurrentThreadId(),
+                     PsGetCurrentProcessId());
         }
         return STATUS_ACCESS_DENIED;
     }
@@ -6382,9 +6386,11 @@ R0S_INTERNAL NTSTATUS DriverUnload(PDRIVER_OBJECT DriverObject)
     } __except (EXCEPTION_EXECUTE_HANDLER) { }
 
     if (g_DebugMode & 0x0000400000000000ULL)
-        DbgPrint("R0S: DriverUnload status=0x%08X uptime=%I64u\n",
+        DbgPrint("R0S: DriverUnload status=0x%08X uptime=%I64u tid=%p pid=%p\n",
                  STATUS_SUCCESS,
-                 (UINT64)KeQueryInterruptTime());
+                 (UINT64)KeQueryInterruptTime(),
+                 PsGetCurrentThreadId(),
+                 PsGetCurrentProcessId());
 
     return STATUS_SUCCESS;
 }
