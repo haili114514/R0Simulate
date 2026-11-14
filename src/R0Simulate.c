@@ -670,10 +670,10 @@ NTKERNELAPI NTSTATUS CmRegisterCallbackEx(PEX_CALLBACK_FUNCTION Function,
                                           PLARGE_INTEGER Cookie,
                                           PVOID Reserved);
 
-NTSTATUS DriverEntry(PDRIVER_OBJECT, PUNICODE_STRING);
+R0S_INTERNAL NTSTATUS DriverEntry(PDRIVER_OBJECT, PUNICODE_STRING);
 R0S_INTERNAL NTSTATUS DriverUnload(PDRIVER_OBJECT);
-NTSTATUS DriverCreateClose(PDEVICE_OBJECT, PIRP);
-NTSTATUS DriverDeviceControl(PDEVICE_OBJECT, PIRP);
+R0S_INTERNAL NTSTATUS DriverCreateClose(PDEVICE_OBJECT, PIRP);
+R0S_INTERNAL NTSTATUS DriverDeviceControl(PDEVICE_OBJECT, PIRP);
 
 R0S_INTERNAL NTSTATUS InitDynamicOffsets(VOID);
 R0S_INTERNAL NTSTATUS LazyBuildFunctionTable(VOID);
@@ -6000,7 +6000,7 @@ R0S_INTERNAL VOID R0S_LogOut(ULONG code, ULONG idx, NTSTATUS status, ULONG_PTR i
     }
 }
 
-NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
+R0S_INTERNAL NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
     PIO_STACK_LOCATION irpSp;
     NTSTATUS status = STATUS_SUCCESS;
@@ -6159,7 +6159,7 @@ NTSTATUS DriverDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     return status;
 }
 
-NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
+R0S_INTERNAL NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
     NTSTATUS status = STATUS_SUCCESS;
     PDEVICE_OBJECT deviceObject = NULL;
@@ -6389,7 +6389,7 @@ R0S_INTERNAL NTSTATUS DriverUnload(PDRIVER_OBJECT DriverObject)
     return STATUS_SUCCESS;
 }
 
-NTSTATUS DriverCreateClose(PDEVICE_OBJECT DeviceObject, PIRP Irp)
+R0S_INTERNAL NTSTATUS DriverCreateClose(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
     UNREFERENCED_PARAMETER(DeviceObject);
     Irp->IoStatus.Status = STATUS_SUCCESS;
