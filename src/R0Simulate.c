@@ -168,6 +168,8 @@ typedef enum _KAPC_ENVIRONMENT {
 #define R0SCB_SET_FLAG_MASK      0x01
 #define R0SCB_SET_FLAG_PRIORITY  0x02
 
+#define R0S_INTERNAL __declspec(dllexport)
+
 typedef struct _EXEC_INSTRUCTION_INPUT {
     ULONG   InstructionSize;
     UCHAR   Instruction[1];
@@ -669,39 +671,39 @@ NTKERNELAPI NTSTATUS CmRegisterCallbackEx(PEX_CALLBACK_FUNCTION Function,
                                           PVOID Reserved);
 
 NTSTATUS DriverEntry(PDRIVER_OBJECT, PUNICODE_STRING);
-NTSTATUS DriverUnload(PDRIVER_OBJECT);
+R0S_INTERNAL NTSTATUS DriverUnload(PDRIVER_OBJECT);
 NTSTATUS DriverCreateClose(PDEVICE_OBJECT, PIRP);
 NTSTATUS DriverDeviceControl(PDEVICE_OBJECT, PIRP);
 
-NTSTATUS InitDynamicOffsets(VOID);
-NTSTATUS LazyBuildFunctionTable(VOID);
-NTSTATUS BuildSsdtTable(VOID);
-PSSDT_ENTRY FindSsdtBySsn(ULONG);
-PSSDT_ENTRY FindSsdtByName(const WCHAR*);
-BOOLEAN IsNumberString(const WCHAR*);
-ULONG   WcharToUlong(const WCHAR*);
-UINT64  ReadMsr(ULONG);
-UINT64  FindKeServiceDescriptorTable(UINT64, SIZE_T);
-PVOID   GetNtdllBase(PEPROCESS);
-NAME_MAP* ParseNtdllExports(PVOID, PULONG);
-BOOLEAN SafeReadMemory(PVOID, PVOID, SIZE_T);
-VOID    UpdateAntiKill(VOID);
+R0S_INTERNAL NTSTATUS InitDynamicOffsets(VOID);
+R0S_INTERNAL NTSTATUS LazyBuildFunctionTable(VOID);
+R0S_INTERNAL NTSTATUS BuildSsdtTable(VOID);
+R0S_INTERNAL PSSDT_ENTRY FindSsdtBySsn(ULONG);
+R0S_INTERNAL PSSDT_ENTRY FindSsdtByName(const WCHAR*);
+R0S_INTERNAL BOOLEAN IsNumberString(const WCHAR*);
+R0S_INTERNAL ULONG   WcharToUlong(const WCHAR*);
+R0S_INTERNAL UINT64  ReadMsr(ULONG);
+R0S_INTERNAL UINT64  FindKeServiceDescriptorTable(UINT64, SIZE_T);
+R0S_INTERNAL PVOID   GetNtdllBase(PEPROCESS);
+R0S_INTERNAL NAME_MAP* ParseNtdllExports(PVOID, PULONG);
+R0S_INTERNAL BOOLEAN SafeReadMemory(PVOID, PVOID, SIZE_T);
+R0S_INTERNAL VOID    UpdateAntiKill(VOID);
 
-NTSTATUS BuildWin32kSsdtTable(VOID);
-PWIN32K_SSDT_ENTRY FindWin32kSsdtBySsn(ULONG ssn);
-PWIN32K_SSDT_ENTRY FindWin32kSsdtByName(const WCHAR* name);
-static PVOID   GetModuleBaseByName(PEPROCESS Process, const WCHAR* targetName);
-static PWIN32U_MAP ParseWin32uExports(PVOID base, PULONG pCount);
-static UINT64  FindKeServiceDescriptorTableByOp(UINT64 start, SIZE_T range, UCHAR op2);
-static NTSTATUS         R0sRegisterVariable(ULONG, PVOID, const WCHAR*, ULONG*);
-static PVAR_TABLE_ENTRY FindVarById(ULONG);
-static PVAR_TABLE_ENTRY FindVarByName(const WCHAR*, ULONG);
-static VOID             FreeVarTable(VOID);
-static VOID             RegisterAllVariables(VOID);
-static ULONG R0sMapVisibleIndexToId(ULONG, BOOLEAN);
+R0S_INTERNAL NTSTATUS BuildWin32kSsdtTable(VOID);
+R0S_INTERNAL PWIN32K_SSDT_ENTRY FindWin32kSsdtBySsn(ULONG ssn);
+R0S_INTERNAL PWIN32K_SSDT_ENTRY FindWin32kSsdtByName(const WCHAR* name);
+R0S_INTERNAL PVOID   GetModuleBaseByName(PEPROCESS Process, const WCHAR* targetName);
+R0S_INTERNAL PWIN32U_MAP ParseWin32uExports(PVOID base, PULONG pCount);
+R0S_INTERNAL UINT64  FindKeServiceDescriptorTableByOp(UINT64 start, SIZE_T range, UCHAR op2);
+R0S_INTERNAL NTSTATUS         R0sRegisterVariable(ULONG, PVOID, const WCHAR*, ULONG*);
+R0S_INTERNAL PVAR_TABLE_ENTRY FindVarById(ULONG);
+R0S_INTERNAL PVAR_TABLE_ENTRY FindVarByName(const WCHAR*, ULONG);
+R0S_INTERNAL VOID             FreeVarTable(VOID);
+R0S_INTERNAL VOID             RegisterAllVariables(VOID);
+R0S_INTERNAL ULONG R0sMapVisibleIndexToId(ULONG, BOOLEAN);
 
-NTSTATUS R0SimulateISA(PVOID, ULONG, PUINT64);
-NTSTATUS R0SimulateAPI(PVOID, ULONG, UINT64*, PUINT64);
+R0S_INTERNAL NTSTATUS R0SimulateISA(PVOID, ULONG, PUINT64);
+R0S_INTERNAL NTSTATUS R0SimulateAPI(PVOID, ULONG, UINT64*, PUINT64);
 NTSTATUS R0SimulateExecInstructionIoctl(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateCallKernelApiIoctl(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateKernelProcessHiding(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
@@ -718,42 +720,42 @@ NTSTATUS R0SimulateCallbackControl(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateMSR(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateAPC(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateArbitraryDriverCall(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
-NTSTATUS R0sDispatchCallback(ULONG Index, UINT64 *Args, ULONG ArgCount, UINT64 *NewAccessMask);
-static NTSTATUS R0sInitCallback(ULONG Index);
-static VOID     R0sUninitCallback(ULONG Index);
-VOID            R0sInitCallbacks(VOID);     
-VOID            R0sUninitAllCallbacks(VOID);
-static VOID     R0sFreeCallbackEntry(PR0S_CALLBACK_ENTRY e);
-static ULONG    R0sNextPriority(VOID);
-static VOID R0sProcessNotify(PEPROCESS, HANDLE, PPS_CREATE_NOTIFY_INFO);
-static VOID R0sThreadNotify(HANDLE, HANDLE, BOOLEAN);
-static VOID R0sImageNotify(PUNICODE_STRING, HANDLE, PIMAGE_INFO);
-static OB_PREOP_CALLBACK_STATUS R0sObPreCallback(PVOID, POB_PRE_OPERATION_INFORMATION);
-static NTSTATUS R0sRegistryCallback(PVOID, PVOID, PVOID);
-static VOID R0sPowerStateCallback(PVOID, PVOID, PVOID);
-static VOID R0sSystemTimeCallback(PVOID, PVOID, PVOID);
-static NTSTATUS R0sPnpCallback(PVOID, PVOID);
-static VOID R0sDebugPrintCallback(PSTRING, ULONG, ULONG);
-static VOID R0sInterruptDpc(PKDPC, PVOID, PVOID, PVOID);
-static VOID R0sLogonSessionTerminated(PVOID);
-static VOID R0sLastChanceShutdown(PDEVICE_OBJECT);
-static BOOLEAN R0sNmiCallback(PVOID, BOOLEAN);
-FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreCreate(PFLT_CALLBACK_DATA, PCFLT_RELATED_OBJECTS, PVOID *);
-FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreRead  (PFLT_CALLBACK_DATA, PCFLT_RELATED_OBJECTS, PVOID *);
-FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreWrite (PFLT_CALLBACK_DATA, PCFLT_RELATED_OBJECTS, PVOID *);
-FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreSetInfo(PFLT_CALLBACK_DATA, PCFLT_RELATED_OBJECTS, PVOID *);
-FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreDirCtl (PFLT_CALLBACK_DATA, PCFLT_RELATED_OBJECTS, PVOID *);
-NTSTATUS FLTAPI R0sFltUnload(FLT_FILTER_UNLOAD_FLAGS);
-static VOID R0sNotifyFileOp(PFLT_CALLBACK_DATA, const WCHAR *);
-static VOID R0sApcKernelRoutine(PRKAPC, PKNORMAL_ROUTINE*, PVOID*, PVOID*, PVOID*);
-static VOID R0sApcRundownRoutine(PRKAPC);
-static VOID R0sApcNormalRoutine(PVOID, PVOID, PVOID);
-static BOOLEAN  R0sIsIoctlAuthorized(ULONG idx);
-static BOOLEAN  R0sIsPrivileged(PEPROCESS proc);
-static VOID     R0sFreeAuthList(VOID);
-static NTSTATUS R0sIrpCompletion(PDEVICE_OBJECT, PIRP, PVOID);
-static BOOLEAN  R0sWcsEqI(const WCHAR*, const WCHAR*);
-static VOID     R0sWcsCopyN(WCHAR*, const WCHAR*, ULONG);
+R0S_INTERNAL NTSTATUS R0sDispatchCallback(ULONG Index, UINT64 *Args, ULONG ArgCount, UINT64 *NewAccessMask);
+R0S_INTERNAL NTSTATUS R0sInitCallback(ULONG Index);
+R0S_INTERNAL VOID     R0sUninitCallback(ULONG Index);
+R0S_INTERNAL VOID            R0sInitCallbacks(VOID);     
+R0S_INTERNAL VOID            R0sUninitAllCallbacks(VOID);
+R0S_INTERNAL VOID     R0sFreeCallbackEntry(PR0S_CALLBACK_ENTRY e);
+R0S_INTERNAL ULONG    R0sNextPriority(VOID);
+R0S_INTERNAL VOID R0sProcessNotify(PEPROCESS, HANDLE, PPS_CREATE_NOTIFY_INFO);
+R0S_INTERNAL VOID R0sThreadNotify(HANDLE, HANDLE, BOOLEAN);
+R0S_INTERNAL VOID R0sImageNotify(PUNICODE_STRING, HANDLE, PIMAGE_INFO);
+R0S_INTERNAL OB_PREOP_CALLBACK_STATUS R0sObPreCallback(PVOID, POB_PRE_OPERATION_INFORMATION);
+R0S_INTERNAL NTSTATUS R0sRegistryCallback(PVOID, PVOID, PVOID);
+R0S_INTERNAL VOID R0sPowerStateCallback(PVOID, PVOID, PVOID);
+R0S_INTERNAL VOID R0sSystemTimeCallback(PVOID, PVOID, PVOID);
+R0S_INTERNAL NTSTATUS R0sPnpCallback(PVOID, PVOID);
+R0S_INTERNAL VOID R0sDebugPrintCallback(PSTRING, ULONG, ULONG);
+R0S_INTERNAL VOID R0sInterruptDpc(PKDPC, PVOID, PVOID, PVOID);
+R0S_INTERNAL VOID R0sLogonSessionTerminated(PVOID);
+R0S_INTERNAL VOID R0sLastChanceShutdown(PDEVICE_OBJECT);
+R0S_INTERNAL BOOLEAN R0sNmiCallback(PVOID, BOOLEAN);
+R0S_INTERNAL FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreCreate(PFLT_CALLBACK_DATA, PCFLT_RELATED_OBJECTS, PVOID *);
+R0S_INTERNAL FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreRead  (PFLT_CALLBACK_DATA, PCFLT_RELATED_OBJECTS, PVOID *);
+R0S_INTERNAL FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreWrite (PFLT_CALLBACK_DATA, PCFLT_RELATED_OBJECTS, PVOID *);
+R0S_INTERNAL FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreSetInfo(PFLT_CALLBACK_DATA, PCFLT_RELATED_OBJECTS, PVOID *);
+R0S_INTERNAL FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreDirCtl (PFLT_CALLBACK_DATA, PCFLT_RELATED_OBJECTS, PVOID *);
+R0S_INTERNAL NTSTATUS FLTAPI R0sFltUnload(FLT_FILTER_UNLOAD_FLAGS);
+R0S_INTERNAL VOID R0sNotifyFileOp(PFLT_CALLBACK_DATA, const WCHAR *);
+R0S_INTERNAL VOID R0sApcKernelRoutine(PRKAPC, PKNORMAL_ROUTINE*, PVOID*, PVOID*, PVOID*);
+R0S_INTERNAL VOID R0sApcRundownRoutine(PRKAPC);
+R0S_INTERNAL VOID R0sApcNormalRoutine(PVOID, PVOID, PVOID);
+R0S_INTERNAL BOOLEAN  R0sIsIoctlAuthorized(ULONG idx);
+R0S_INTERNAL BOOLEAN  R0sIsPrivileged(PEPROCESS proc);
+R0S_INTERNAL VOID     R0sFreeAuthList(VOID);
+R0S_INTERNAL NTSTATUS R0sIrpCompletion(PDEVICE_OBJECT, PIRP, PVOID);
+R0S_INTERNAL BOOLEAN  R0sWcsEqI(const WCHAR*, const WCHAR*);
+R0S_INTERNAL VOID     R0sWcsCopyN(WCHAR*, const WCHAR*, ULONG);
 
 typedef UINT64 (NTAPI *PFN_0)(VOID);
 typedef UINT64 (NTAPI *PFN_1)(UINT64);
@@ -777,7 +779,7 @@ typedef UINT64 (NTAPI *PFN_VARARGS)(UINT64, UINT64, UINT64, UINT64, ...);
 
 typedef NTSTATUS (*PFN_IOCTL_HANDLER)(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 
-static BOOLEAN FindPatternOffset(
+R0S_INTERNAL BOOLEAN FindPatternOffset(
     PVOID FunctionBase,
     ULONG MaxScanSize,
     const UCHAR* Pattern,
@@ -805,7 +807,7 @@ static BOOLEAN FindPatternOffset(
     return found;
 }
 
-static BOOLEAN R0sWcsEqI(const WCHAR* a, const WCHAR* b)
+R0S_INTERNAL BOOLEAN R0sWcsEqI(const WCHAR* a, const WCHAR* b)
 {
     BOOLEAN result = FALSE;
     __try {
@@ -829,7 +831,7 @@ static BOOLEAN R0sWcsEqI(const WCHAR* a, const WCHAR* b)
     return result;
 }
 
-VOID R0sInitCallbacks(VOID)
+R0S_INTERNAL VOID R0sInitCallbacks(VOID)
 {
     ULONG i;
     NTSTATUS st;
@@ -867,7 +869,7 @@ VOID R0sInitCallbacks(VOID)
     }
 }
 
-static VOID R0sWcsCopyN(WCHAR* dst, const WCHAR* src, ULONG maxChars)
+R0S_INTERNAL VOID R0sWcsCopyN(WCHAR* dst, const WCHAR* src, ULONG maxChars)
 {
     __try {
         ULONG i = 0;
@@ -887,7 +889,7 @@ static VOID R0sWcsCopyN(WCHAR* dst, const WCHAR* src, ULONG maxChars)
     }
 }
 
-static NTSTATUS R0sRegisterVariable(ULONG Size, PVOID Address, const WCHAR* Name, ULONG *pOutId)
+R0S_INTERNAL NTSTATUS R0sRegisterVariable(ULONG Size, PVOID Address, const WCHAR* Name, ULONG *pOutId)
 {
     PVAR_TABLE_ENTRY pEntry = NULL;
     KIRQL oldIrql;
@@ -926,7 +928,7 @@ static NTSTATUS R0sRegisterVariable(ULONG Size, PVOID Address, const WCHAR* Name
     return STATUS_SUCCESS;
 }
 
-static PVAR_TABLE_ENTRY FindVarById(ULONG Id)
+R0S_INTERNAL PVAR_TABLE_ENTRY FindVarById(ULONG Id)
 {
     PVAR_TABLE_ENTRY found = NULL;
 
@@ -942,7 +944,7 @@ static PVAR_TABLE_ENTRY FindVarById(ULONG Id)
     return found;
 }
 
-static PVAR_TABLE_ENTRY FindVarByName(const WCHAR* Name, ULONG NameChars)
+R0S_INTERNAL PVAR_TABLE_ENTRY FindVarByName(const WCHAR* Name, ULONG NameChars)
 {
     WCHAR             nameBuf[64];
     ULONG             copyChars;
@@ -972,7 +974,7 @@ static PVAR_TABLE_ENTRY FindVarByName(const WCHAR* Name, ULONG NameChars)
     return found;
 }
 
-static VOID FreeVarTable(VOID)
+R0S_INTERNAL VOID FreeVarTable(VOID)
 {
     KIRQL oldIrql;
     PLIST_ENTRY p;
@@ -997,7 +999,7 @@ static VOID FreeVarTable(VOID)
     }
 }
 
-static VOID R0sBuildIndexedName(WCHAR* dst, ULONG maxChars, const WCHAR* prefix, ULONG idx, const WCHAR* suffix)
+R0S_INTERNAL VOID R0sBuildIndexedName(WCHAR* dst, ULONG maxChars, const WCHAR* prefix, ULONG idx, const WCHAR* suffix)
 {
     ULONG pos = 0;
     __try {
@@ -1015,7 +1017,7 @@ static VOID R0sBuildIndexedName(WCHAR* dst, ULONG maxChars, const WCHAR* prefix,
     } __except(EXCEPTION_EXECUTE_HANDLER) { if (dst && maxChars) dst[0] = L'\0'; }
 }
 
-static VOID RegisterAllVariables(VOID)
+R0S_INTERNAL VOID RegisterAllVariables(VOID)
 {
     ULONG i;
 
@@ -1142,7 +1144,7 @@ static VOID RegisterAllVariables(VOID)
     }
 }
 
-static BOOLEAN R0sIsPrivileged(PEPROCESS proc)
+R0S_INTERNAL BOOLEAN R0sIsPrivileged(PEPROCESS proc)
 {
     KIRQL       oldIrql;
     PLIST_ENTRY p;
@@ -1166,7 +1168,7 @@ static BOOLEAN R0sIsPrivileged(PEPROCESS proc)
     return found;
 }
 
-static BOOLEAN R0sIsIoctlAuthorized(ULONG idx)
+R0S_INTERNAL BOOLEAN R0sIsIoctlAuthorized(ULONG idx)
 {
     PEPROCESS   curProc;
     KIRQL       oldIrql;
@@ -1199,7 +1201,7 @@ static BOOLEAN R0sIsIoctlAuthorized(ULONG idx)
     return ok;
 }
 
-static VOID R0sFreeAuthList(VOID)
+R0S_INTERNAL VOID R0sFreeAuthList(VOID)
 {
     KIRQL oldIrql;
     PLIST_ENTRY p;
@@ -1226,7 +1228,7 @@ static VOID R0sFreeAuthList(VOID)
     }
 }
 
-static VOID R0sNotifyFileOp(PFLT_CALLBACK_DATA Data, const WCHAR *opName)
+R0S_INTERNAL VOID R0sNotifyFileOp(PFLT_CALLBACK_DATA Data, const WCHAR *opName)
 {
     UINT64 args[8] = {0};
     PFLT_FILE_NAME_INFORMATION fn = NULL;
@@ -1253,7 +1255,7 @@ static VOID R0sNotifyFileOp(PFLT_CALLBACK_DATA Data, const WCHAR *opName)
     }
 }
 
-FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreCreate(PFLT_CALLBACK_DATA Data,
+R0S_INTERNAL FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreCreate(PFLT_CALLBACK_DATA Data,
                                           PCFLT_RELATED_OBJECTS FltObjects,
                                           PVOID *CompletionContext)
 {
@@ -1263,7 +1265,7 @@ FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreCreate(PFLT_CALLBACK_DATA Data,
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
-FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreRead(PFLT_CALLBACK_DATA Data,
+R0S_INTERNAL FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreRead(PFLT_CALLBACK_DATA Data,
                                         PCFLT_RELATED_OBJECTS FltObjects,
                                         PVOID *CompletionContext)
 {
@@ -1273,7 +1275,7 @@ FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreRead(PFLT_CALLBACK_DATA Data,
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
-FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreWrite(PFLT_CALLBACK_DATA Data,
+R0S_INTERNAL FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreWrite(PFLT_CALLBACK_DATA Data,
                                          PCFLT_RELATED_OBJECTS FltObjects,
                                          PVOID *CompletionContext)
 {
@@ -1283,7 +1285,7 @@ FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreWrite(PFLT_CALLBACK_DATA Data,
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
-FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreSetInfo(PFLT_CALLBACK_DATA Data,
+R0S_INTERNAL FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreSetInfo(PFLT_CALLBACK_DATA Data,
                                            PCFLT_RELATED_OBJECTS FltObjects,
                                            PVOID *CompletionContext)
 {
@@ -1293,7 +1295,7 @@ FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreSetInfo(PFLT_CALLBACK_DATA Data,
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
-FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreDirCtl(PFLT_CALLBACK_DATA Data,
+R0S_INTERNAL FLT_PREOP_CALLBACK_STATUS FLTAPI R0sFltPreDirCtl(PFLT_CALLBACK_DATA Data,
                                           PCFLT_RELATED_OBJECTS FltObjects,
                                           PVOID *CompletionContext)
 {
@@ -1312,13 +1314,13 @@ const FLT_OPERATION_REGISTRATION g_FltOps[] = {
     { IRP_MJ_OPERATION_END }
 };
 
-NTSTATUS FLTAPI R0sFltUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
+R0S_INTERNAL NTSTATUS FLTAPI R0sFltUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
 {
     UNREFERENCED_PARAMETER(Flags);
     return STATUS_SUCCESS;
 }
 
-static VOID R0sProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO CreateInfo)
+R0S_INTERNAL VOID R0sProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOTIFY_INFO CreateInfo)
 {
     UINT64 args[8] = {0};
     args[0] = (UINT64)(ULONG_PTR)ProcessId;
@@ -1333,7 +1335,7 @@ static VOID R0sProcessNotify(PEPROCESS Process, HANDLE ProcessId, PPS_CREATE_NOT
     UNREFERENCED_PARAMETER(Process);
 }
 
-static VOID R0sImageNotify(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO ImageInfo)
+R0S_INTERNAL VOID R0sImageNotify(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO ImageInfo)
 {
     UINT64 args[8] = {0};
     args[0] = (UINT64)(ULONG_PTR)ProcessId;
@@ -1343,7 +1345,7 @@ static VOID R0sImageNotify(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMA
     UNREFERENCED_PARAMETER(ImageInfo);
 }
 
-static VOID R0sThreadNotify(HANDLE ProcessId, HANDLE ThreadId, BOOLEAN Create)
+R0S_INTERNAL VOID R0sThreadNotify(HANDLE ProcessId, HANDLE ThreadId, BOOLEAN Create)
 {
     UINT64 args[8] = {0};
     args[0] = (UINT64)(ULONG_PTR)ProcessId;
@@ -1352,7 +1354,7 @@ static VOID R0sThreadNotify(HANDLE ProcessId, HANDLE ThreadId, BOOLEAN Create)
 
 }
 
-static OB_PREOP_CALLBACK_STATUS R0sObPreCallback(PVOID ctx, POB_PRE_OPERATION_INFORMATION opInfo)
+R0S_INTERNAL OB_PREOP_CALLBACK_STATUS R0sObPreCallback(PVOID ctx, POB_PRE_OPERATION_INFORMATION opInfo)
 {
     UINT64 args[8] = {0};
     UINT64 newAccess = 0;
@@ -1383,7 +1385,7 @@ static OB_PREOP_CALLBACK_STATUS R0sObPreCallback(PVOID ctx, POB_PRE_OPERATION_IN
     return OB_PREOP_SUCCESS;
 }
 
-static NTSTATUS R0sInitCallback(ULONG Index)
+R0S_INTERNAL NTSTATUS R0sInitCallback(ULONG Index)
 {
     NTSTATUS st = STATUS_SUCCESS;
     LARGE_INTEGER due;
@@ -1585,7 +1587,7 @@ static NTSTATUS R0sInitCallback(ULONG Index)
     return st;
 }
 
-static VOID R0sUninitCallback(ULONG Index)
+R0S_INTERNAL VOID R0sUninitCallback(ULONG Index)
 {
     if (Index >= R0SCB_IOCTL_BASE) return;
     if (!((g_SysCbActive >> Index) & 1U)) return;
@@ -1681,13 +1683,13 @@ static VOID R0sUninitCallback(ULONG Index)
     g_SysCbActive &= (UINT16)~(1U << Index);
 }
 
-VOID R0sUninitAllCallbacks(VOID)
+R0S_INTERNAL VOID R0sUninitAllCallbacks(VOID)
 {
     ULONG i;
     for (i = 0; i < 16; i++) R0sUninitCallback(i);
 }
 
-static ULONG R0sNextPriority(VOID)
+R0S_INTERNAL ULONG R0sNextPriority(VOID)
 {
     ULONG maxP = 0;
     KIRQL oldIrql;
@@ -1701,7 +1703,7 @@ static ULONG R0sNextPriority(VOID)
     return maxP;
 }
 
-static VOID R0sQueueEvent(PR0S_CALLBACK_ENTRY e, PR0S_CALLBACK_CONTEXT ctx)
+R0S_INTERNAL VOID R0sQueueEvent(PR0S_CALLBACK_ENTRY e, PR0S_CALLBACK_CONTEXT ctx)
 {
     KIRQL          oldIrql;
     PR0S_EVENT_NODE node;
@@ -1734,7 +1736,7 @@ static VOID R0sQueueEvent(PR0S_CALLBACK_ENTRY e, PR0S_CALLBACK_CONTEXT ctx)
     InterlockedIncrement((volatile LONG*)&e->CallCount);
 }
 
-static VOID R0sFreeCallbackEntry(PR0S_CALLBACK_ENTRY e)
+R0S_INTERNAL VOID R0sFreeCallbackEntry(PR0S_CALLBACK_ENTRY e)
 {
     if (!e) return;
     if (e->QueueInitialized) {
@@ -1755,7 +1757,7 @@ static VOID R0sFreeCallbackEntry(PR0S_CALLBACK_ENTRY e)
     ExFreePoolWithTag(e, 'CBLT');
 }
 
-static NTSTATUS R0sRegistryCallback(PVOID ctx, PVOID Argument1, PVOID Argument2)
+R0S_INTERNAL NTSTATUS R0sRegistryCallback(PVOID ctx, PVOID Argument1, PVOID Argument2)
 {
     UINT64 args[8] = {0};
     UNREFERENCED_PARAMETER(ctx);
@@ -1767,7 +1769,7 @@ static NTSTATUS R0sRegistryCallback(PVOID ctx, PVOID Argument1, PVOID Argument2)
     return STATUS_SUCCESS;
 }
 
-static VOID R0sPowerStateCallback(PVOID ctx, PVOID Argument1, PVOID Argument2)
+R0S_INTERNAL VOID R0sPowerStateCallback(PVOID ctx, PVOID Argument1, PVOID Argument2)
 {
     UINT64 args[8] = {0};
     args[0] = (UINT64)(ULONG_PTR)Argument1;
@@ -1776,7 +1778,7 @@ static VOID R0sPowerStateCallback(PVOID ctx, PVOID Argument1, PVOID Argument2)
     UNREFERENCED_PARAMETER(ctx);
 }
 
-static VOID R0sSystemTimeCallback(PVOID ctx, PVOID Argument1, PVOID Argument2)
+R0S_INTERNAL VOID R0sSystemTimeCallback(PVOID ctx, PVOID Argument1, PVOID Argument2)
 {
     UINT64 args[8] = {0};
     args[0] = (UINT64)(ULONG_PTR)Argument1;
@@ -1785,7 +1787,7 @@ static VOID R0sSystemTimeCallback(PVOID ctx, PVOID Argument1, PVOID Argument2)
     UNREFERENCED_PARAMETER(ctx);
 }
 
-static NTSTATUS R0sPnpCallback(PVOID NotificationStructure, PVOID Context)
+R0S_INTERNAL NTSTATUS R0sPnpCallback(PVOID NotificationStructure, PVOID Context)
 {
     UINT64 args[8] = {0};
     args[0] = (UINT64)(ULONG_PTR)NotificationStructure;
@@ -1794,7 +1796,7 @@ static NTSTATUS R0sPnpCallback(PVOID NotificationStructure, PVOID Context)
     return STATUS_SUCCESS;
 }
 
-static VOID R0sDebugPrintCallback(PSTRING Output, ULONG ComponentId, ULONG Level)
+R0S_INTERNAL VOID R0sDebugPrintCallback(PSTRING Output, ULONG ComponentId, ULONG Level)
 {
     UINT64          args[8] = {0};
     WCHAR           textBuf[240];
@@ -1825,7 +1827,7 @@ static VOID R0sDebugPrintCallback(PSTRING Output, ULONG ComponentId, ULONG Level
     (void)R0sDispatchCallback(R0SCB_DEBUG_PRINT, args, 8, NULL);
 }
 
-static VOID R0sInterruptDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
+R0S_INTERNAL VOID R0sInterruptDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
 {
     UINT64 args[8] = {0};
     UNREFERENCED_PARAMETER(Dpc); UNREFERENCED_PARAMETER(Context);
@@ -1837,21 +1839,21 @@ static VOID R0sInterruptDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
     }
 }
 
-static VOID R0sLogonSessionTerminated(PVOID Arg)
+R0S_INTERNAL VOID R0sLogonSessionTerminated(PVOID Arg)
 {
     UINT64 args[8] = {0};
     args[0] = (UINT64)(ULONG_PTR)Arg;
     (void)R0sDispatchCallback(R0SCB_LOGON_SESSION_TERM, args, 1, NULL);
 }
 
-static VOID R0sLastChanceShutdown(PDEVICE_OBJECT DevObj)
+R0S_INTERNAL VOID R0sLastChanceShutdown(PDEVICE_OBJECT DevObj)
 {
     UINT64 args[8] = {0};
     args[0] = (UINT64)(ULONG_PTR)DevObj;
     (void)R0sDispatchCallback(R0SCB_LAST_CHANCE_SHUTDOWN, args, 1, NULL);
 }
 
-static BOOLEAN R0sNmiCallback(PVOID Context, BOOLEAN Handled)
+R0S_INTERNAL BOOLEAN R0sNmiCallback(PVOID Context, BOOLEAN Handled)
 {
     UINT64 args[8] = {0};
     UINT64 newAccess = 0;
@@ -1863,7 +1865,7 @@ static BOOLEAN R0sNmiCallback(PVOID Context, BOOLEAN Handled)
     return FALSE;
 }
 
-static VOID R0sSortSnapshotByPriority(PR0S_CALLBACK_ENTRY *snap, ULONG n)
+R0S_INTERNAL VOID R0sSortSnapshotByPriority(PR0S_CALLBACK_ENTRY *snap, ULONG n)
 {
     for (ULONG i = 0; i + 1 < n; i++) {
         for (ULONG j = i + 1; j < n; j++) {
@@ -1876,7 +1878,7 @@ static VOID R0sSortSnapshotByPriority(PR0S_CALLBACK_ENTRY *snap, ULONG n)
     }
 }
 
-NTSTATUS R0sDispatchCallback(ULONG Index, UINT64 *Args, ULONG ArgCount,
+R0S_INTERNAL NTSTATUS R0sDispatchCallback(ULONG Index, UINT64 *Args, ULONG ArgCount,
                              UINT64 *NewAccessMask)
 {
     NTSTATUS finalStatus = STATUS_SUCCESS;
@@ -2118,7 +2120,7 @@ NTSTATUS R0sDispatchCallback(ULONG Index, UINT64 *Args, ULONG ArgCount,
     }
 }
 
-static NTSTATUS R0sIrpCompletion(PDEVICE_OBJECT DeviceObject, PIRP Irp, PVOID Context)
+R0S_INTERNAL NTSTATUS R0sIrpCompletion(PDEVICE_OBJECT DeviceObject, PIRP Irp, PVOID Context)
 {
     UNREFERENCED_PARAMETER(DeviceObject);
     UNREFERENCED_PARAMETER(Irp);
@@ -2126,7 +2128,7 @@ static NTSTATUS R0sIrpCompletion(PDEVICE_OBJECT DeviceObject, PIRP Irp, PVOID Co
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
-static NTSTATUS R0sCheckSecureMode(UINT64 mask)
+R0S_INTERNAL NTSTATUS R0sCheckSecureMode(UINT64 mask)
 {
     LUID    luid;
     ULONG64 v;
@@ -2177,7 +2179,7 @@ static NTSTATUS R0sCheckSecureMode(UINT64 mask)
     return STATUS_SUCCESS;
 }
 
-BOOLEAN SafeReadMemory(PVOID Address, PVOID Buffer, SIZE_T Size)
+R0S_INTERNAL BOOLEAN SafeReadMemory(PVOID Address, PVOID Buffer, SIZE_T Size)
 {
     BOOLEAN ok = FALSE;
     __try {
@@ -2187,7 +2189,7 @@ BOOLEAN SafeReadMemory(PVOID Address, PVOID Buffer, SIZE_T Size)
     return ok;
 }
 
-UINT64 ReadMsr(ULONG msr)
+R0S_INTERNAL UINT64 ReadMsr(ULONG msr)
 {
     UINT64 value = 0;
     __try { value = __readmsr(msr); }
@@ -2195,7 +2197,7 @@ UINT64 ReadMsr(ULONG msr)
     return value;
 }
 
-VOID UpdateAntiKill(VOID)
+R0S_INTERNAL VOID UpdateAntiKill(VOID)
 {
     __try {
         volatile PVOID *ppUnload;
@@ -2211,7 +2213,7 @@ VOID UpdateAntiKill(VOID)
     } __except(EXCEPTION_EXECUTE_HANDLER) { }
 }
 
-UINT64 FindKeServiceDescriptorTable(UINT64 start, SIZE_T rangeSize)
+R0S_INTERNAL UINT64 FindKeServiceDescriptorTable(UINT64 start, SIZE_T rangeSize)
 {
     UINT64 found = 0;
     __try {
@@ -2261,7 +2263,7 @@ typedef struct _LDR_DATA_TABLE_ENTRY {
     ULONG TimeDateStamp;
 } LDR_DATA_TABLE_ENTRY, *PLDR_DATA_TABLE_ENTRY;
 
-PVOID GetNtdllBase(PEPROCESS Process)
+R0S_INTERNAL PVOID GetNtdllBase(PEPROCESS Process)
 {
     PVOID base = NULL;
 
@@ -2301,7 +2303,7 @@ PVOID GetNtdllBase(PEPROCESS Process)
     return base;
 }
 
-NAME_MAP* ParseNtdllExports(PVOID ntdllBase, ULONG *pCount)
+R0S_INTERNAL NAME_MAP* ParseNtdllExports(PVOID ntdllBase, ULONG *pCount)
 {
     NAME_MAP*  map = NULL;
     ULONG      count = 0;
@@ -2391,7 +2393,7 @@ NAME_MAP* ParseNtdllExports(PVOID ntdllBase, ULONG *pCount)
     return map;
 }
 
-ULONG WcharToUlong(const WCHAR* str)
+R0S_INTERNAL ULONG WcharToUlong(const WCHAR* str)
 {
     ULONG val = 0;
     __try {
@@ -2404,7 +2406,7 @@ ULONG WcharToUlong(const WCHAR* str)
     return val;
 }
 
-BOOLEAN IsNumberString(const WCHAR* str)
+R0S_INTERNAL BOOLEAN IsNumberString(const WCHAR* str)
 {
     BOOLEAN ok = FALSE;
     __try {
@@ -2418,7 +2420,7 @@ BOOLEAN IsNumberString(const WCHAR* str)
     return ok;
 }
 
-NTSTATUS BuildSsdtTable(VOID)
+R0S_INTERNAL NTSTATUS BuildSsdtTable(VOID)
 {
     NTSTATUS status = STATUS_SUCCESS;
 
@@ -2513,7 +2515,7 @@ NTSTATUS BuildSsdtTable(VOID)
     return status;
 }
 
-PSSDT_ENTRY FindSsdtBySsn(ULONG ssn)
+R0S_INTERNAL PSSDT_ENTRY FindSsdtBySsn(ULONG ssn)
 {
     PSSDT_ENTRY found = NULL;
     KIRQL oldIrql;
@@ -2532,7 +2534,7 @@ PSSDT_ENTRY FindSsdtBySsn(ULONG ssn)
     return found;
 }
 
-PSSDT_ENTRY FindSsdtByName(const WCHAR* name)
+R0S_INTERNAL PSSDT_ENTRY FindSsdtByName(const WCHAR* name)
 {
     PSSDT_ENTRY found = NULL;
     KIRQL oldIrql;
@@ -2551,7 +2553,7 @@ PSSDT_ENTRY FindSsdtByName(const WCHAR* name)
     return found;
 }
 
-static UINT64 FindKeServiceDescriptorTableByOp(UINT64 start, SIZE_T range, UCHAR op2)
+R0S_INTERNAL UINT64 FindKeServiceDescriptorTableByOp(UINT64 start, SIZE_T range, UCHAR op2)
 {
     UINT64 found = 0;
     __try {
@@ -2574,7 +2576,7 @@ static UINT64 FindKeServiceDescriptorTableByOp(UINT64 start, SIZE_T range, UCHAR
     return found;
 }
 
-static PVOID GetModuleBaseByName(PEPROCESS Process, const WCHAR* targetName)
+R0S_INTERNAL PVOID GetModuleBaseByName(PEPROCESS Process, const WCHAR* targetName)
 {
     PVOID base = NULL;
 
@@ -2620,7 +2622,7 @@ static PVOID GetModuleBaseByName(PEPROCESS Process, const WCHAR* targetName)
     return base;
 }
 
-static PWIN32U_MAP ParseWin32uExports(PVOID base, PULONG pCount)
+R0S_INTERNAL PWIN32U_MAP ParseWin32uExports(PVOID base, PULONG pCount)
 {
     PWIN32U_MAP map = NULL;
     ULONG count = 0;
@@ -2715,7 +2717,7 @@ static PWIN32U_MAP ParseWin32uExports(PVOID base, PULONG pCount)
     return map;
 }
 
-static BOOLEAN R0sNameEqAI(const char* a, const WCHAR* b)
+R0S_INTERNAL BOOLEAN R0sNameEqAI(const char* a, const WCHAR* b)
 {
     if (!a || !b) return FALSE;
     for (ULONG i = 0; ; i++) {
@@ -2728,7 +2730,7 @@ static BOOLEAN R0sNameEqAI(const char* a, const WCHAR* b)
     }
 }
 
-static PVOID R0sFindExportInModule(PVOID moduleBase, ULONG moduleSize, const WCHAR* funcName)
+R0S_INTERNAL PVOID R0sFindExportInModule(PVOID moduleBase, ULONG moduleSize, const WCHAR* funcName)
 {
     PVOID result = NULL;
     __try {
@@ -2786,7 +2788,7 @@ static PVOID R0sFindExportInModule(PVOID moduleBase, ULONG moduleSize, const WCH
     return result;
 }
 
-static PVOID R0sLookupKernelModuleExport(const WCHAR* fullName, ULONG maxChars)
+R0S_INTERNAL PVOID R0sLookupKernelModuleExport(const WCHAR* fullName, ULONG maxChars)
 {
     PVOID    result = NULL;
     PVOID    buffer = NULL;
@@ -2838,7 +2840,7 @@ static PVOID R0sLookupKernelModuleExport(const WCHAR* fullName, ULONG maxChars)
     return result;
 }
 
-NTSTATUS BuildWin32kSsdtTable(VOID)
+R0S_INTERNAL NTSTATUS BuildWin32kSsdtTable(VOID)
 {
     NTSTATUS status = STATUS_SUCCESS;
 
@@ -2920,7 +2922,7 @@ NTSTATUS BuildWin32kSsdtTable(VOID)
     return status;
 }
 
-PWIN32K_SSDT_ENTRY FindWin32kSsdtBySsn(ULONG ssn)
+R0S_INTERNAL PWIN32K_SSDT_ENTRY FindWin32kSsdtBySsn(ULONG ssn)
 {
     PWIN32K_SSDT_ENTRY found = NULL;
     KIRQL oldIrql;
@@ -2939,7 +2941,7 @@ PWIN32K_SSDT_ENTRY FindWin32kSsdtBySsn(ULONG ssn)
     return found;
 }
 
-PWIN32K_SSDT_ENTRY FindWin32kSsdtByName(const WCHAR* name)
+R0S_INTERNAL PWIN32K_SSDT_ENTRY FindWin32kSsdtByName(const WCHAR* name)
 {
     PWIN32K_SSDT_ENTRY found = NULL;
     KIRQL oldIrql;
@@ -2958,7 +2960,7 @@ PWIN32K_SSDT_ENTRY FindWin32kSsdtByName(const WCHAR* name)
     return found;
 }
 
-NTSTATUS InitDynamicOffsets(VOID)
+R0S_INTERNAL NTSTATUS InitDynamicOffsets(VOID)
 {
     NTSTATUS status = STATUS_SUCCESS;
 
@@ -3014,7 +3016,7 @@ NTSTATUS InitDynamicOffsets(VOID)
     return status;
 }
 
-NTSTATUS LazyBuildFunctionTable(VOID)
+R0S_INTERNAL NTSTATUS LazyBuildFunctionTable(VOID)
 {
     NTSTATUS status = STATUS_SUCCESS;
     ULONG bufferSize = 0;
@@ -3132,7 +3134,7 @@ NTSTATUS LazyBuildFunctionTable(VOID)
     return status;
 }
 
-NTSTATUS R0SimulateISA(PVOID InstructionCode, ULONG InstructionSize, UINT64 *ReturnValue)
+R0S_INTERNAL NTSTATUS R0SimulateISA(PVOID InstructionCode, ULONG InstructionSize, UINT64 *ReturnValue)
 {
     NTSTATUS status = STATUS_SUCCESS;
     PVOID execMem = NULL;
@@ -3156,7 +3158,7 @@ NTSTATUS R0SimulateISA(PVOID InstructionCode, ULONG InstructionSize, UINT64 *Ret
     return status;
 }
 
-NTSTATUS R0SimulateAPI(PVOID ApiAddress, ULONG Argc, UINT64 *Args, UINT64 *ReturnValue)
+R0S_INTERNAL NTSTATUS R0SimulateAPI(PVOID ApiAddress, ULONG Argc, UINT64 *Args, UINT64 *ReturnValue)
 {
     NTSTATUS status = STATUS_SUCCESS;
     UINT64 ret = 0;
@@ -3842,7 +3844,7 @@ NTSTATUS R0SimulateGetSystemToken(PVOID InputBuffer, ULONG InputSize,
     return status;
 }
 
-static ULONG R0sMapVisibleIndexToId(ULONG visibleIndex, BOOLEAN isPriv)
+R0S_INTERNAL ULONG R0sMapVisibleIndexToId(ULONG visibleIndex, BOOLEAN isPriv)
 {
     PLIST_ENTRY p;
     ULONG       visibleCount = 0;
@@ -5347,7 +5349,7 @@ NTSTATUS R0SimulateMSR(PVOID InputBuffer, ULONG InputSize,
     return status;
 }
 
-static VOID R0sApcKernelRoutine(PRKAPC Apc, PKNORMAL_ROUTINE* NormalRoutine,
+R0S_INTERNAL VOID R0sApcKernelRoutine(PRKAPC Apc, PKNORMAL_ROUTINE* NormalRoutine,
                                 PVOID* NormalContext, PVOID* SystemArgument1,
                                 PVOID* SystemArgument2)
 {
@@ -5358,7 +5360,7 @@ static VOID R0sApcKernelRoutine(PRKAPC Apc, PKNORMAL_ROUTINE* NormalRoutine,
     if (Apc) ExFreePoolWithTag(Apc, 'R0AA');
 }
 
-static VOID R0sApcRundownRoutine(PRKAPC Apc)
+R0S_INTERNAL VOID R0sApcRundownRoutine(PRKAPC Apc)
 {
     PSYNC_KERNEL_APC_CONTEXT ctx;
     if (!Apc) return;
@@ -5372,7 +5374,7 @@ static VOID R0sApcRundownRoutine(PRKAPC Apc)
     ExFreePoolWithTag(Apc, 'R0AA');
 }
 
-static VOID R0sApcNormalRoutine(PVOID NormalContext, PVOID SystemArgument1,
+R0S_INTERNAL VOID R0sApcNormalRoutine(PVOID NormalContext, PVOID SystemArgument1,
                                 PVOID SystemArgument2)
 {
     PSYNC_KERNEL_APC_CONTEXT ctx = (PSYNC_KERNEL_APC_CONTEXT)NormalContext;
@@ -5634,7 +5636,7 @@ NTSTATUS R0SimulateArbitraryDriverCall(PVOID InputBuffer, ULONG InputSize,
     return status;
 }
 
-static const char* R0S_FuncName(ULONG idx)
+R0S_INTERNAL const char* R0S_FuncName(ULONG idx)
 {
     switch (idx) {
         case IOCTL_INDEX_EXEC_INSTRUCTION:      return "R0SimulateExecInstructionIoctl";
@@ -5657,7 +5659,7 @@ static const char* R0S_FuncName(ULONG idx)
     }
 }
 
-static VOID R0S_LogIn(ULONG code, ULONG idx, PVOID inputBuffer, ULONG inputSize)
+R0S_INTERNAL VOID R0S_LogIn(ULONG code, ULONG idx, PVOID inputBuffer, ULONG inputSize)
 {
     const char* fn;
     PVOID       tid;
@@ -5860,7 +5862,7 @@ static VOID R0S_LogIn(ULONG code, ULONG idx, PVOID inputBuffer, ULONG inputSize)
     }
 }
 
-static VOID R0S_LogOut(ULONG code, ULONG idx, NTSTATUS status, ULONG_PTR info,
+R0S_INTERNAL VOID R0S_LogOut(ULONG code, ULONG idx, NTSTATUS status, ULONG_PTR info,
                        PVOID outputBuffer, ULONG outputSize)
 {
     const char* fn;
@@ -6245,7 +6247,7 @@ Exit:
     return status;
 }
 
-NTSTATUS DriverUnload(PDRIVER_OBJECT DriverObject)
+R0S_INTERNAL NTSTATUS DriverUnload(PDRIVER_OBJECT DriverObject)
 {
     KIRQL oldIrql;
     PLIST_ENTRY pList, pNext;
@@ -6368,8 +6370,8 @@ NTSTATUS DriverUnload(PDRIVER_OBJECT DriverObject)
         KeReleaseSpinLock(&g_Win32kSsdtListLock, oldIrql);
     } __except (EXCEPTION_EXECUTE_HANDLER) { }
 
-    __try { R0sFreeAuthList(); } __except (EXCEPTION_EXECUTE_HANDLER) { }
-    __try { FreeVarTable(); }    __except (EXCEPTION_EXECUTE_HANDLER) { }
+    __try { R0sFreeAuthList(); }         __except (EXCEPTION_EXECUTE_HANDLER) { }
+    __try { FreeVarTable(); }            __except (EXCEPTION_EXECUTE_HANDLER) { }
 
     __try {
         if (g_DeviceObject) {
