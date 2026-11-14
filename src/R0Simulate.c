@@ -627,6 +627,7 @@ static KSPIN_LOCK g_RateLock;
 static UINT64   g_Slot   = 0;
 static LIST_ENTRY    g_CallbackEntryListHead;
 static KSPIN_LOCK    g_CallbackEntryLock;
+static UINT64         g_CallbackQueueLimit = 1024;
 static UINT64        g_R0CallbackControl  = 0;   
 static ULONG         g_CallbackTimeoutUs  = 10000;       
 static ULONG         g_CallbackAltitude   = 0;        
@@ -1101,6 +1102,7 @@ static VOID RegisterAllVariables(VOID)
     R0sRegisterVariable(sizeof(PVOID),  (PVOID)(ULONG_PTR)&g_Win32kSsdtListHead.Blink, L"g_Win32kSsdtListHead.Blink", NULL);
     R0sRegisterVariable(sizeof(PVOID),  (PVOID)(ULONG_PTR)&g_Win32kSsdtListLock,       L"g_Win32kSsdtListLock",       NULL);
     R0sRegisterVariable(sizeof(BOOLEAN),(PVOID)(ULONG_PTR)&g_Win32kSsdtBuilt,          L"g_Win32kSsdtBuilt",          NULL);    
+    R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_CallbackQueueLimit, L"g_CallbackQueueLimit", NULL);
     R0sRegisterVariable(sizeof(UINT64), (PVOID)(ULONG_PTR)&g_R0CallbackControl, L"g_R0CallbackControl", NULL);
     R0sRegisterVariable(sizeof(UINT16), (PVOID)(ULONG_PTR)&g_SysCbActive, L"g_SysCbActive", NULL);
     R0sRegisterVariable(sizeof(ULONG),  (PVOID)(ULONG_PTR)&g_CallbackTimeoutUs, L"g_CallbackTimeoutUs", NULL);
@@ -1708,7 +1710,7 @@ static VOID R0sQueueEvent(PR0S_CALLBACK_ENTRY e, PR0S_CALLBACK_CONTEXT ctx)
 
     KeAcquireSpinLock(&e->QueueLock, &oldIrql);
 
-    if (e->EventCount >= 1024) {
+    if (e->EventCount >= g_CallbackQueueLimit) {
         PLIST_ENTRY oldest = RemoveHeadList(&e->EventQueueHead);
         PR0S_EVENT_NODE old = CONTAINING_RECORD(oldest, R0S_EVENT_NODE, ListEntry);
         ExFreePoolWithTag(old, 'EVNT');
