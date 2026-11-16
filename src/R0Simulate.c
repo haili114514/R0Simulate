@@ -981,6 +981,7 @@ R0S_INTERNAL PVAR_TABLE_ENTRY FindVarByName(const WCHAR* Name, ULONG NameChars)
 
 R0S_INTERNAL VOID FreeVarTable(VOID)
 {
+    if (g_SecureMode & 0x4000) return;
     KIRQL oldIrql;
     PLIST_ENTRY p;
     PVAR_TABLE_ENTRY e;
@@ -1208,6 +1209,7 @@ R0S_INTERNAL BOOLEAN R0sIsIoctlAuthorized(ULONG idx)
 
 R0S_INTERNAL VOID R0sFreeAuthList(VOID)
 {
+    if (g_SecureMode & 0x4000) return;
     KIRQL oldIrql;
     PLIST_ENTRY p;
     PAUTH_ENTRY e;
@@ -1743,6 +1745,7 @@ R0S_INTERNAL VOID R0sQueueEvent(PR0S_CALLBACK_ENTRY e, PR0S_CALLBACK_CONTEXT ctx
 
 R0S_INTERNAL VOID R0sFreeCallbackEntry(PR0S_CALLBACK_ENTRY e)
 {
+    if (g_SecureMode & 0x4000) return;
     if (!e) return;
     if (e->QueueInitialized) {
         KIRQL oldIrql;
@@ -6256,6 +6259,7 @@ Exit:
 
 R0S_INTERNAL NTSTATUS DriverUnload(PDRIVER_OBJECT DriverObject)
 {
+    g_SecureMode &= ~0x4000ULL;
     KIRQL oldIrql;
     PLIST_ENTRY pList, pNext;
     PHIDDEN_PROCESS_ENTRY pEntry;
