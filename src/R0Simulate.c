@@ -5667,17 +5667,26 @@ R0S_INTERNAL const char* R0S_FuncName(ULONG idx)
     }
 }
 
+R0S_INTERNAL UINT64 R0sLogTime(VOID)
+{
+    LARGE_INTEGER t;
+    KeQuerySystemTime(&t);
+    return (UINT64)t.QuadPart;
+}
+
 R0S_INTERNAL VOID R0S_LogIn(ULONG code, ULONG idx, PVOID inputBuffer, ULONG inputSize)
 {
     const char* fn;
     PVOID       tid;
     PVOID       pid;
+    UINT64      time;
 
     if (!R0S_DEBUG_TEST(idx)) return;
 
-    fn  = R0S_FuncName(idx);
-    tid = PsGetCurrentThreadId();
-    pid = PsGetCurrentProcessId();
+    time = R0sLogTime();
+    fn   = R0S_FuncName(idx);
+    tid  = PsGetCurrentThreadId();
+    pid  = PsGetCurrentProcessId();
 
     __try {
         switch (idx) {
@@ -5688,11 +5697,11 @@ R0S_INTERNAL VOID R0S_LogIn(ULONG code, ULONG idx, PVOID inputBuffer, ULONG inpu
                 ULONG i, off, chunk;
 
                 if (!inputBuffer || inputSize < sizeof(EXEC_INSTRUCTION_INPUT))
-                        { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                        { DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s <bad>\n", time, tid, pid, fn); break; }
                 p = (PEXEC_INSTRUCTION_INPUT)inputBuffer;
 
-                DbgPrint("R0S IN  tid=%p pid=%p func=%s size=%u\n",
-                         tid, pid, fn, p->InstructionSize);
+                DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s size=%u\n",
+                         time, tid, pid, fn, p->InstructionSize);
 
                 for (off = 0; off < p->InstructionSize; off += 64) {
                     chunk = p->InstructionSize - off;
@@ -5704,13 +5713,13 @@ R0S_INTERNAL VOID R0S_LogIn(ULONG code, ULONG idx, PVOID inputBuffer, ULONG inpu
                         hex[i * 3 + 2] = ' ';
                     }
                     hex[chunk * 3] = 0;
-                    DbgPrint("  %s\n", hex);
+                    DbgPrint("  time=%I64u %s\n", time, hex);
                 }
                 break;
             }
             case IOCTL_INDEX_CALL_KERNEL_API: {
                 if (!inputBuffer || inputSize < sizeof(CALL_KERNEL_API_INPUT))
-                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                    { DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s <bad>\n", time, tid, pid, fn); break; }
                 PCALL_KERNEL_API_INPUT p = (PCALL_KERNEL_API_INPUT)inputBuffer;
                 WCHAR name[64] = {0};
                 if ((p->Flags & 0x03) != R0SIMULATE_MODE_ADDRESS &&
@@ -5721,58 +5730,59 @@ R0S_INTERNAL VOID R0S_LogIn(ULONG code, ULONG idx, PVOID inputBuffer, ULONG inpu
                     RtlCopyMemory(name, p->ApiName, n * sizeof(WCHAR));
                     name[n] = L'\0';
                 }
-                DbgPrint("R0S IN  tid=%p pid=%p func=%s argc=%u flags=0x%X a0=0x%I64X a1=0x%I64X a2=0x%I64X a3=0x%I64X name=%ws\n",
-                         tid, pid, fn, p->ArgumentCount, p->Flags,
+                DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s argc=%u flags=0x%X a0=0x%I64X a1=0x%I64X a2=0x%I64X a3=0x%I64X name=%ws\n",
+                         time, tid, pid, fn, p->ArgumentCount, p->Flags,
                          p->Arguments[0], p->Arguments[1],
                          p->Arguments[2], p->Arguments[3], name);
                 break;
             }
             case IOCTL_INDEX_PROCESS_HIDING: {
                 if (!inputBuffer || inputSize < sizeof(PROCESS_HIDING_INPUT))
-                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                    { DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s <bad>\n", time, tid, pid, fn); break; }
                 PPROCESS_HIDING_INPUT p = (PPROCESS_HIDING_INPUT)inputBuffer;
                 ULONG targetPid = 0;
                 if (inputSize >= sizeof(PROCESS_HIDING_INPUT) + sizeof(ULONG)) {
                     targetPid = *(ULONG*)((PUCHAR)inputBuffer + sizeof(PROCESS_HIDING_INPUT));
                 }
-                DbgPrint("R0S IN  tid=%p pid=%p func=%s op=0x%X targetPid=%u\n",
-                         tid, pid, fn, p->Operation, targetPid);
+                DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s op=0x%X targetPid=%u\n",
+                         time, tid, pid, fn, p->Operation, targetPid);
                 break;
             }
             case IOCTL_INDEX_PREVIOUS_MODE_SWITCH: {
                 if (!inputBuffer || inputSize < sizeof(PREVIOUS_MODE_SWITCH_INPUT))
-                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                    { DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s <bad>\n", time, tid, pid, fn); break; }
                 PPREVIOUS_MODE_SWITCH_INPUT p = (PPREVIOUS_MODE_SWITCH_INPUT)inputBuffer;
-                DbgPrint("R0S IN  tid=%p pid=%p func=%s mode=%u viewOnly=%u\n",
-                         tid, pid, fn, p->Mode, p->ViewOnly);
+                DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s mode=%u viewOnly=%u\n",
+                         time, tid, pid, fn, p->Mode, p->ViewOnly);
                 break;
             }
             case IOCTL_INDEX_KERNEL_OPEN_HANDLE: {
                 if (!inputBuffer || inputSize < sizeof(KERNEL_OPEN_HANDLE_INPUT))
-                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                    { DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s <bad>\n", time, tid, pid, fn); break; }
                 PKERNEL_OPEN_HANDLE_INPUT p = (PKERNEL_OPEN_HANDLE_INPUT)inputBuffer;
-                DbgPrint("R0S IN  tid=%p pid=%p func=%s type=%u access=0x%X target=0x%I64X mode=%u\n",
-                         tid, pid, fn, p->Type, p->DesiredAccess, p->Target, p->AccessMode);
+                DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s type=%u access=0x%X target=0x%I64X mode=%u\n",
+                         time, tid, pid, fn, p->Type, p->DesiredAccess, p->Target, p->AccessMode);
                 break;
             }
             case IOCTL_INDEX_KERNEL_MEMORY_ACCESS: {
                 if (!inputBuffer || inputSize < sizeof(KERNEL_MEMORY_ACCESS_INPUT))
-                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                    { DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s <bad>\n", time, tid, pid, fn); break; }
                 PKERNEL_MEMORY_ACCESS_INPUT p = (PKERNEL_MEMORY_ACCESS_INPUT)inputBuffer;
-                DbgPrint("R0S IN  tid=%p pid=%p func=%s op=%u addr=0x%I64X off=0x%X len=%u\n",
-                         tid, pid, fn, p->Operation, p->Address, p->Offset, p->Length);
+                DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s op=%u addr=0x%I64X off=0x%X len=%u\n",
+                         time, tid, pid, fn, p->Operation, p->Address, p->Offset, p->Length);
                 break;
             }
             case IOCTL_INDEX_GET_SYSTEM_TOKEN: {
                 if (!inputBuffer || inputSize < sizeof(GET_SYSTEM_TOKEN_INPUT))
-                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                    { DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s <bad>\n", time, tid, pid, fn); break; }
                 PGET_SYSTEM_TOKEN_INPUT p = (PGET_SYSTEM_TOKEN_INPUT)inputBuffer;
-                DbgPrint("R0S IN  tid=%p pid=%p func=%s replace=%u\n", tid, pid, fn, p->ReplaceToken);
+                DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s replace=%u\n",
+                         time, tid, pid, fn, p->ReplaceToken);
                 break;
             }
             case IOCTL_INDEX_SET_INTERNAL_VARS: {
                 if (!inputBuffer || inputSize < sizeof(SET_INTERNAL_VAR_INPUT))
-                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                    { DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s <bad>\n", time, tid, pid, fn); break; }
                 PSET_INTERNAL_VAR_INPUT p = (PSET_INTERNAL_VAR_INPUT)inputBuffer;
                 WCHAR name[64] = {0};
                 if (p->NameLength > 0 && p->NameLength <= 512 &&
@@ -5782,13 +5792,13 @@ R0S_INTERNAL VOID R0S_LogIn(ULONG code, ULONG idx, PVOID inputBuffer, ULONG inpu
                     RtlCopyMemory(name, (PUCHAR)inputBuffer + sizeof(SET_INTERNAL_VAR_INPUT), n * sizeof(WCHAR));
                     name[n] = L'\0';
                 }
-                DbgPrint("R0S IN  tid=%p pid=%p func=%s op=0x%X id=%u value=0x%I64X name=%ws\n",
-                         tid, pid, fn, p->Operation, p->VariableId, p->Value, name);
+                DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s op=0x%X id=%u value=0x%I64X name=%ws\n",
+                         time, tid, pid, fn, p->Operation, p->VariableId, p->Value, name);
                 break;
             }
             case IOCTL_INDEX_GET_KERNEL_FUNCTION: {
                 if (!inputBuffer || inputSize < sizeof(ULONG))
-                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                    { DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s <bad>\n", time, tid, pid, fn); break; }
                 ULONG nameLen = *(ULONG*)inputBuffer;
                 WCHAR name[64] = {0};
                 if (nameLen > 0 && nameLen <= 512 &&
@@ -5798,75 +5808,77 @@ R0S_INTERNAL VOID R0S_LogIn(ULONG code, ULONG idx, PVOID inputBuffer, ULONG inpu
                     RtlCopyMemory(name, (PUCHAR)inputBuffer + sizeof(ULONG), n * sizeof(WCHAR));
                     name[n] = L'\0';
                 }
-                DbgPrint("R0S IN  tid=%p pid=%p func=%s nameLen=%u name=%ws\n", tid, pid, fn, nameLen, name);
+                DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s nameLen=%u name=%ws\n",
+                         time, tid, pid, fn, nameLen, name);
                 break;
             }
             case IOCTL_INDEX_IO: {
                 if (!inputBuffer || inputSize < sizeof(R0S_IO_INPUT))
-                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                    { DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s <bad>\n", time, tid, pid, fn); break; }
                 PR0S_IO_INPUT p = (PR0S_IO_INPUT)inputBuffer;
-                DbgPrint("R0S IN  tid=%p pid=%p func=%s op=0x%X port=0x%X value=0x%X\n",
-                         tid, pid, fn, p->Operation, p->Port, p->Value);
+                DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s op=0x%X port=0x%X value=0x%X\n",
+                         time, tid, pid, fn, p->Operation, p->Port, p->Value);
                 break;
             }
             case IOCTL_INDEX_AUTHORIZED_LIST: {
                 if (!inputBuffer || inputSize < sizeof(R0S_AUTH_LIST_INPUT))
-                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                    { DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s <bad>\n", time, tid, pid, fn); break; }
                 PR0S_AUTH_LIST_INPUT p = (PR0S_AUTH_LIST_INPUT)inputBuffer;
-                DbgPrint("R0S IN  tid=%p pid=%p func=%s op=0x%X pid=%u\n",
-                         tid, pid, fn, p->Operation, p->Pid);
+                DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s op=0x%X pid=%u\n",
+                         time, tid, pid, fn, p->Operation, p->Pid);
                 break;
             }
             case IOCTL_INDEX_CREATE_SYSTEM_THREAD: {
                 if (!inputBuffer || inputSize < sizeof(R0S_CREATE_THREAD_INPUT))
-                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                    { DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s <bad>\n", time, tid, pid, fn); break; }
                 PR0S_CREATE_THREAD_INPUT p = (PR0S_CREATE_THREAD_INPUT)inputBuffer;
-                DbgPrint("R0S IN  tid=%p pid=%p func=%s routine=0x%I64X ctx=0x%I64X access=0x%X\n",
-                         tid, pid, fn, p->StartRoutine, p->StartContext, p->DesiredAccess);
+                DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s routine=0x%I64X ctx=0x%I64X access=0x%X\n",
+                         time, tid, pid, fn, p->StartRoutine, p->StartContext, p->DesiredAccess);
                 break;
             }
             case IOCTL_INDEX_CALLBACK_CONTROL: {
                 if (!inputBuffer || inputSize < sizeof(R0S_CB_BASE_INPUT))
-                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                    { DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s <bad>\n", time, tid, pid, fn); break; }
                 PR0S_CB_BASE_INPUT p = (PR0S_CB_BASE_INPUT)inputBuffer;
-                DbgPrint("R0S IN  tid=%p pid=%p func=%s op=0x%X targetTid=%u\n",
-                         tid, pid, fn, p->Operation, p->TargetTid);
+                DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s op=0x%X targetTid=%u\n",
+                         time, tid, pid, fn, p->Operation, p->TargetTid);
                 break;
             }
             case IOCTL_INDEX_MSR: {
                 if (!inputBuffer || inputSize < sizeof(R0S_MSR_INPUT))
-                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                    { DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s <bad>\n", time, tid, pid, fn); break; }
                 PR0S_MSR_INPUT p = (PR0S_MSR_INPUT)inputBuffer;
-                DbgPrint("R0S IN  tid=%p pid=%p func=%s op=0x%X msr=0x%X value=0x%I64X\n",
-                         tid, pid, fn, p->Operation, p->Msr, p->Value);
+                DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s op=0x%X msr=0x%X value=0x%I64X\n",
+                         time, tid, pid, fn, p->Operation, p->Msr, p->Value);
                 break;
             }
             case IOCTL_INDEX_APC: {
                 if (!inputBuffer || inputSize < sizeof(SYNC_KERNEL_APC_INPUT))
-                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                    { DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s <bad>\n", time, tid, pid, fn); break; }
                 PSYNC_KERNEL_APC_INPUT p = (PSYNC_KERNEL_APC_INPUT)inputBuffer;
-                DbgPrint("R0S IN  tid=%p pid=%p func=%s targetTid=%p addr=0x%I64X argc=%u event=%p result=%p\n",
-                         tid, pid, fn,
+                DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s targetTid=%p addr=0x%I64X argc=%u event=%p result=%p\n",
+                         time, tid, pid, fn,
                          p->ThreadId, p->FunctionAddress, p->ArgumentCount,
                          p->CompletionEvent, p->ResultBuffer);
                 break;
             }
             case IOCTL_INDEX_ARBITRARY_DRIVER_CALL: {
                 if (!inputBuffer || inputSize < sizeof(R0S_CALL_DRIVER_INPUT))
-                    { DbgPrint("R0S IN  tid=%p pid=%p func=%s <bad>\n", tid, pid, fn); break; }
+                    { DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s <bad>\n", time, tid, pid, fn); break; }
                 PR0S_CALL_DRIVER_INPUT p = (PR0S_CALL_DRIVER_INPUT)inputBuffer;
-                DbgPrint("R0S IN  tid=%p pid=%p func=%s drv=0x%I64X mj=0x%X ioctl=0x%X inLen=%u outLen=%u\n",
-                         tid, pid, fn, p->DriverObject, p->MajorFunction, p->IoControlCode,
+                DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s drv=0x%I64X mj=0x%X ioctl=0x%X inLen=%u outLen=%u\n",
+                         time, tid, pid, fn, p->DriverObject, p->MajorFunction, p->IoControlCode,
                          p->InputLength, p->OutputLength);
                 break;
             }
             default:
-                DbgPrint("R0S IN  tid=%p pid=%p func=%s idx=0x%02X code=0x%08X in=%u\n",
-                         tid, pid, fn, idx, code, inputSize);
+                DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s idx=0x%02X code=0x%08X in=%u\n",
+                         time, tid, pid, fn, idx, code, inputSize);
                 break;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        DbgPrint("R0S IN  tid=%p pid=%p func=%s <fault 0x%08X>\n", tid, pid, fn, GetExceptionCode());
+        DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s <fault 0x%08X>\n",
+                 time, tid, pid, fn, GetExceptionCode());
     }
 }
 
@@ -5876,12 +5888,14 @@ R0S_INTERNAL VOID R0S_LogOut(ULONG code, ULONG idx, NTSTATUS status, ULONG_PTR i
     const char* fn;
     PVOID       tid;
     PVOID       pid;
+    UINT64      time;
 
     if (!R0S_DEBUG_TEST(idx)) return;
 
-    fn  = R0S_FuncName(idx);
-    tid = PsGetCurrentThreadId();
-    pid = PsGetCurrentProcessId();
+    time = R0sLogTime();
+    fn   = R0S_FuncName(idx);
+    tid  = PsGetCurrentThreadId();
+    pid  = PsGetCurrentProcessId();
 
     __try {
         switch (idx) {
@@ -5891,8 +5905,8 @@ R0S_INTERNAL VOID R0S_LogOut(ULONG code, ULONG idx, NTSTATUS status, ULONG_PTR i
                     PEXEC_INSTRUCTION_OUTPUT p = (PEXEC_INSTRUCTION_OUTPUT)outputBuffer;
                     ret = p->ReturnValue; st = (NTSTATUS)p->Status;
                 }
-                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X ret=0x%I64X info=%u\n",
-                         tid, pid, fn, (ULONG)st, ret, (ULONG)info);
+                DbgPrint("R0S OUT time=%I64u tid=%p pid=%p func=%s status=0x%08X ret=0x%I64X info=%u\n",
+                         time, tid, pid, fn, (ULONG)st, ret, (ULONG)info);
                 break;
             }
             case IOCTL_INDEX_CALL_KERNEL_API: {
@@ -5901,8 +5915,8 @@ R0S_INTERNAL VOID R0S_LogOut(ULONG code, ULONG idx, NTSTATUS status, ULONG_PTR i
                     PCALL_KERNEL_API_OUTPUT p = (PCALL_KERNEL_API_OUTPUT)outputBuffer;
                     ret = p->ReturnValue; st = (NTSTATUS)p->Status;
                 }
-                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X ret=0x%I64X info=%u\n",
-                         tid, pid, fn, (ULONG)st, ret, (ULONG)info);
+                DbgPrint("R0S OUT time=%I64u tid=%p pid=%p func=%s status=0x%08X ret=0x%I64X info=%u\n",
+                         time, tid, pid, fn, (ULONG)st, ret, (ULONG)info);
                 break;
             }
             case IOCTL_INDEX_PROCESS_HIDING:
@@ -5910,8 +5924,8 @@ R0S_INTERNAL VOID R0S_LogOut(ULONG code, ULONG idx, NTSTATUS status, ULONG_PTR i
             case IOCTL_INDEX_GET_KERNEL_FUNCTION:
             case IOCTL_INDEX_AUTHORIZED_LIST:
             case IOCTL_INDEX_KERNEL_MEMORY_ACCESS: {
-                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X info=%u\n",
-                         tid, pid, fn, (ULONG)status, (ULONG)info);
+                DbgPrint("R0S OUT time=%I64u tid=%p pid=%p func=%s status=0x%08X info=%u\n",
+                         time, tid, pid, fn, (ULONG)status, (ULONG)info);
                 break;
             }
             case IOCTL_INDEX_PREVIOUS_MODE_SWITCH: {
@@ -5920,8 +5934,8 @@ R0S_INTERNAL VOID R0S_LogOut(ULONG code, ULONG idx, NTSTATUS status, ULONG_PTR i
                     PPREVIOUS_MODE_SWITCH_OUTPUT p = (PPREVIOUS_MODE_SWITCH_OUTPUT)outputBuffer;
                     oldM = p->OldMode; newM = p->NewMode; st = (NTSTATUS)p->Status;
                 }
-                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X old=%u new=%u info=%u\n",
-                         tid, pid, fn, (ULONG)st, oldM, newM, (ULONG)info);
+                DbgPrint("R0S OUT time=%I64u tid=%p pid=%p func=%s status=0x%08X old=%u new=%u info=%u\n",
+                         time, tid, pid, fn, (ULONG)st, oldM, newM, (ULONG)info);
                 break;
             }
             case IOCTL_INDEX_KERNEL_OPEN_HANDLE: {
@@ -5931,8 +5945,8 @@ R0S_INTERNAL VOID R0S_LogOut(ULONG code, ULONG idx, NTSTATUS status, ULONG_PTR i
                     handle = p->ResultHandle; st = (NTSTATUS)p->Status;
                     kptr = p->KernelPointer; type = p->Type;
                 }
-                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X handle=%p type=%u kptr=%p info=%u\n",
-                         tid, pid, fn, (ULONG)st, handle, type, kptr, (ULONG)info);
+                DbgPrint("R0S OUT time=%I64u tid=%p pid=%p func=%s status=0x%08X handle=%p type=%u kptr=%p info=%u\n",
+                         time, tid, pid, fn, (ULONG)st, handle, type, kptr, (ULONG)info);
                 break;
             }
             case IOCTL_INDEX_GET_SYSTEM_TOKEN: {
@@ -5941,8 +5955,8 @@ R0S_INTERNAL VOID R0S_LogOut(ULONG code, ULONG idx, NTSTATUS status, ULONG_PTR i
                     PGET_SYSTEM_TOKEN_OUTPUT p = (PGET_SYSTEM_TOKEN_OUTPUT)outputBuffer;
                     h = p->TokenHandle; st = (NTSTATUS)p->Status;
                 }
-                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X token=%p info=%u\n",
-                         tid, pid, fn, (ULONG)st, h, (ULONG)info);
+                DbgPrint("R0S OUT time=%I64u tid=%p pid=%p func=%s status=0x%08X token=%p info=%u\n",
+                         time, tid, pid, fn, (ULONG)st, h, (ULONG)info);
                 break;
             }
             case IOCTL_INDEX_IO: {
@@ -5951,8 +5965,8 @@ R0S_INTERNAL VOID R0S_LogOut(ULONG code, ULONG idx, NTSTATUS status, ULONG_PTR i
                     PR0S_IO_OUTPUT p = (PR0S_IO_OUTPUT)outputBuffer;
                     val = p->Value; st = (NTSTATUS)p->Status;
                 }
-                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X value=0x%X info=%u\n",
-                         tid, pid, fn, (ULONG)st, val, (ULONG)info);
+                DbgPrint("R0S OUT time=%I64u tid=%p pid=%p func=%s status=0x%08X value=0x%X info=%u\n",
+                         time, tid, pid, fn, (ULONG)st, val, (ULONG)info);
                 break;
             }
             case IOCTL_INDEX_CREATE_SYSTEM_THREAD: {
@@ -5961,13 +5975,13 @@ R0S_INTERNAL VOID R0S_LogOut(ULONG code, ULONG idx, NTSTATUS status, ULONG_PTR i
                     PR0S_CREATE_THREAD_OUTPUT p = (PR0S_CREATE_THREAD_OUTPUT)outputBuffer;
                     h = p->ThreadHandle; st = (NTSTATUS)p->Status;
                 }
-                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X thread=%p info=%u\n",
-                         tid, pid, fn, (ULONG)st, h, (ULONG)info);
+                DbgPrint("R0S OUT time=%I64u tid=%p pid=%p func=%s status=0x%08X thread=%p info=%u\n",
+                         time, tid, pid, fn, (ULONG)st, h, (ULONG)info);
                 break;
             }
             case IOCTL_INDEX_CALLBACK_CONTROL:
-                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X info=%u\n",
-                         tid, pid, fn, (ULONG)status, (ULONG)info);
+                DbgPrint("R0S OUT time=%I64u tid=%p pid=%p func=%s status=0x%08X info=%u\n",
+                         time, tid, pid, fn, (ULONG)status, (ULONG)info);
                 break;
             case IOCTL_INDEX_MSR: {
                 UINT64 val = 0; NTSTATUS st = status;
@@ -5975,16 +5989,16 @@ R0S_INTERNAL VOID R0S_LogOut(ULONG code, ULONG idx, NTSTATUS status, ULONG_PTR i
                     PR0S_MSR_OUTPUT p = (PR0S_MSR_OUTPUT)outputBuffer;
                     val = p->Value; st = (NTSTATUS)p->Status;
                 }
-                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X value=0x%I64X info=%u\n",
-                         tid, pid, fn, (ULONG)st, val, (ULONG)info);
+                DbgPrint("R0S OUT time=%I64u tid=%p pid=%p func=%s status=0x%08X value=0x%I64X info=%u\n",
+                         time, tid, pid, fn, (ULONG)st, val, (ULONG)info);
                 break;
             }
             case IOCTL_INDEX_APC: {
                 NTSTATUS st = status;
                 if (outputBuffer && outputSize >= sizeof(R0SIMULATE_APC_OUTPUT))
                     st = (NTSTATUS)((PR0SIMULATE_APC_OUTPUT)outputBuffer)->Status;
-                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X info=%u\n",
-                         tid, pid, fn, (ULONG)st, (ULONG)info);
+                DbgPrint("R0S OUT time=%I64u tid=%p pid=%p func=%s status=0x%08X info=%u\n",
+                         time, tid, pid, fn, (ULONG)st, (ULONG)info);
                 break;
             }
             case IOCTL_INDEX_ARBITRARY_DRIVER_CALL: {
@@ -5993,18 +6007,18 @@ R0S_INTERNAL VOID R0S_LogOut(ULONG code, ULONG idx, NTSTATUS status, ULONG_PTR i
                     PR0S_CALL_DRIVER_OUTPUT p = (PR0S_CALL_DRIVER_OUTPUT)outputBuffer;
                     st = (NTSTATUS)p->Status; drvInfo = p->Information;
                 }
-                DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X drvStatus=0x%08X drvInfo=%u info=%u\n",
-                         tid, pid, fn, (ULONG)status, (ULONG)st, drvInfo, (ULONG)info);
+                DbgPrint("R0S OUT time=%I64u tid=%p pid=%p func=%s status=0x%08X drvStatus=0x%08X drvInfo=%u info=%u\n",
+                         time, tid, pid, fn, (ULONG)status, (ULONG)st, drvInfo, (ULONG)info);
                 break;
             }
             default:
-                DbgPrint("R0S OUT tid=%p pid=%p func=%s idx=0x%02X status=0x%08X info=%u\n",
-                         tid, pid, fn, idx, (ULONG)status, (ULONG)info);
+                DbgPrint("R0S OUT time=%I64u tid=%p pid=%p func=%s idx=0x%02X status=0x%08X info=%u\n",
+                         time, tid, pid, fn, idx, (ULONG)status, (ULONG)info);
                 break;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        DbgPrint("R0S OUT tid=%p pid=%p func=%s status=0x%08X info=%u <fault>\n",
-                 tid, pid, fn, (ULONG)status, (ULONG)info);
+        DbgPrint("R0S OUT time=%I64u tid=%p pid=%p func=%s status=0x%08X info=%u <fault>\n",
+                 time, tid, pid, fn, (ULONG)status, (ULONG)info);
     }
 }
 
