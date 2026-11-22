@@ -158,7 +158,7 @@ int main(void)
         ULONG infoCount = 0;
         BOOL  ok;
         printf("  [1.1] OP_LIST: enumerate all driver internal variables\n");
-        ok = R0SimulateSetInternalVariables(
+        ok = R0SimulateSettingsInternalVariables(
             R0SIMULATE_VAR_OP_LIST,
             0, 0,
             listBuffer, sizeof(listBuffer),
@@ -178,7 +178,7 @@ int main(void)
                 ULONG  firstId = pInfo[0].Id;
                 UINT64 val = 0;
                 printf("  [1.2] OP_GET on first enumerated ID=%lu\n", firstId);
-                ok = R0SimulateSetInternalVariables(
+                ok = R0SimulateSettingsInternalVariables(
                     R0SIMULATE_VAR_OP_GET,
                     firstId,
                     0,
@@ -199,7 +199,7 @@ int main(void)
         SetLastError(0);
         {
             UINT64 dummy = 0;
-            ok = R0SimulateSetInternalVariables(
+            ok = R0SimulateSettingsInternalVariables(
                 R0SIMULATE_VAR_OP_GET,
                 0xFFFFFFFF, 0,
                 &dummy, sizeof(dummy),
@@ -781,7 +781,7 @@ apc_done:
 
         printf("  [15.1] Read g_DriverObject from variable table (name=%ls)\n",
                VAR_NAME_G_DRIVEROBJECT);
-        ok = R0SimulateSetInternalVariables(
+        ok = R0SimulateSettingsInternalVariables(
             R0SIMULATE_VAR_OP_GET,
             VAR_ID_G_DRIVEROBJECT,
             0,

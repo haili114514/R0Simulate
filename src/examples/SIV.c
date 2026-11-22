@@ -130,7 +130,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        result = R0SimulateSetInternalVariables(
+        result = R0SimulateSettingsInternalVariables(
             R0SIMULATE_VAR_OP_LIST,
             0, 0,
             buffer, LIST_BUFFER_SIZE,
@@ -176,7 +176,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        result = R0SimulateSetInternalVariables(
+        result = R0SimulateSettingsInternalVariables(
             R0SIMULATE_VAR_OP_GET,
             varId,
             0,
@@ -219,7 +219,7 @@ int main(int argc, char* argv[]) {
         }
 
         value = ParseValue(argv[3]);
-        result = R0SimulateSetInternalVariables(
+        result = R0SimulateSettingsInternalVariables(
             R0SIMULATE_VAR_OP_SET,
             varId,
             value,
