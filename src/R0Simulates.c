@@ -520,11 +520,11 @@ R0SIMULATES_API HANDLE R0SimulateGetSystemToken(BOOL ReplaceToken) {
         return NULL;
     }
     RtlSetLastWin32Error(ERROR_SUCCESS);
-    result = out.TokenHandle;
+    result = (HANDLE)(ULONG_PTR)out.TokenHandle;
     return result;
 }
 
-R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
+R0SIMULATES_API BOOL R0SimulateSettingsInternalVariables(
     ULONG  Operation,
     UINT64 VariableId,
     UINT64 Value,
@@ -533,7 +533,7 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
     PULONG pInfoCount)
 {
     BOOL result = FALSE;
-    SET_INTERNAL_VAR_INPUT in;
+    SETTINGS_INTERNAL_VAR_INPUT in;
     IO_STATUS_BLOCK ioStatus;
     NTSTATUS status;
     BOOLEAN useName = FALSE;
@@ -571,23 +571,23 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
     }
 
     if (useName) {
-        SIZE_T totalInSize = sizeof(SET_INTERNAL_VAR_INPUT) + nameLen;
+        SIZE_T totalInSize = sizeof(SETTINGS_INTERNAL_VAR_INPUT) + nameLen;
         PUCHAR pInBuf = (PUCHAR)RtlAllocateHeap(R0_HEAP, HEAP_ZERO_MEMORY, totalInSize);
         if (!pInBuf) {
             RtlSetLastWin32Error(ERROR_OUTOFMEMORY);
             return FALSE;
         }
-        PSET_INTERNAL_VAR_INPUT pIn = (PSET_INTERNAL_VAR_INPUT)pInBuf;
+        PSETTINGS_INTERNAL_VAR_INPUT pIn = (PSETTINGS_INTERNAL_VAR_INPUT)pInBuf;
         pIn->Operation  = Operation;
         pIn->VariableId = 0;
         pIn->Value      = Value;
         pIn->NameLength = nameLen;
-        memcpy(pInBuf + sizeof(SET_INTERNAL_VAR_INPUT), pName, nameLen);
+        memcpy(pInBuf + sizeof(SETTINGS_INTERNAL_VAR_INPUT), pName, nameLen);
 
         memset(&ioStatus, 0, sizeof(ioStatus));
         status = NtDeviceIoControlFile(
             g_hDriver, NULL, NULL, NULL, &ioStatus,
-            IOCTL_R0SIMULATE_SET_INTERNAL_VARS,
+            IOCTL_R0SIMULATE_SETTINGS_INTERNAL_VARS,
             pInBuf, (ULONG)totalInSize,
             pOutBuffer, outSize
         );
@@ -602,7 +602,7 @@ R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
         memset(&ioStatus, 0, sizeof(ioStatus));
         status = NtDeviceIoControlFile(
             g_hDriver, NULL, NULL, NULL, &ioStatus,
-            IOCTL_R0SIMULATE_SET_INTERNAL_VARS,
+            IOCTL_R0SIMULATE_SETTINGS_INTERNAL_VARS,
             &in, sizeof(in),
             pOutBuffer, outSize
         );
@@ -922,7 +922,7 @@ R0SIMULATES_API BOOL R0SimulateCreateSystemThread(
         return FALSE;
     }
 
-    *pOutThreadHandle = out.ThreadHandle;
+    *pOutThreadHandle = (HANDLE)(ULONG_PTR)out.ThreadHandle;
     RtlSetLastWin32Error(ERROR_SUCCESS);
     result = TRUE;
     return result;
@@ -1012,9 +1012,9 @@ R0SIMULATES_API BOOL R0SimulateCallbackControl(
         pIn->Base.Operation   = Operation;
         pIn->Base.TargetTid   = targetTid;
         pIn->Priority         = priority;
-        pIn->NotifyEvent      = notifyEvent;
-        pIn->SyncEvent        = syncEvent;
-        pIn->SharedBuffer     = sharedBuffer;
+        pIn->NotifyEvent      = (UINT64)(ULONG_PTR)notifyEvent;
+        pIn->SyncEvent        = (UINT64)(ULONG_PTR)syncEvent;
+        pIn->SharedBuffer     = (UINT64)(ULONG_PTR)sharedBuffer;
         pIn->SharedBufferSize = sharedBufferSize;
     } else if (Operation == R0SCB_OP_REMOVE) {
         PR0S_CB_BASE_INPUT pIn = (PR0S_CB_BASE_INPUT)pInBuf;
@@ -1171,11 +1171,11 @@ R0SIMULATES_API BOOL R0SimulateAPC(
         return FALSE;
     }
 
-    pIn->ThreadId        = threadId;
+    pIn->ThreadId        = (UINT64)(ULONG_PTR)threadId;
     pIn->FunctionAddress = functionAddress;
     pIn->ArgumentCount   = argc;
-    pIn->CompletionEvent = completionEvent;
-    pIn->ResultBuffer    = resultBuffer;
+    pIn->CompletionEvent = (UINT64)(ULONG_PTR)completionEvent;
+    pIn->ResultBuffer    = (UINT64)(ULONG_PTR)resultBuffer;
 
     va_start(args, resultBuffer);
     {

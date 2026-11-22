@@ -20,7 +20,7 @@ extern "C" {
 #define IOCTL_R0SIMULATE_KERNEL_OPEN_HANDLE         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_KERNEL_MEMORY_ACCESS       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_GET_SYSTEM_TOKEN           CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_SET_INTERNAL_VARS          CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_SETTINGS_INTERNAL_VARS          CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_IO                         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x809, METHOD_NEITHER, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_AUTHORIZED_LIST            CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80A, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -117,7 +117,7 @@ extern "C" {
 #define R0SCB_IOCTL_KERNEL_OPEN_HANDLE    20
 #define R0SCB_IOCTL_KERNEL_MEMORY_ACCESS  21
 #define R0SCB_IOCTL_GET_SYSTEM_TOKEN      22
-#define R0SCB_IOCTL_SET_INTERNAL_VARS     23
+#define R0SCB_IOCTL_SETTINGS_INTERNAL_VARS     23
 #define R0SCB_IOCTL_GET_KERNEL_FUNCTION   24
 #define R0SCB_IOCTL_IO                    25
 #define R0SCB_IOCTL_AUTHORIZED_LIST       26
@@ -144,6 +144,7 @@ extern "C" {
 
 #define R0SCB_SET_FLAG_MASK      0x01
 #define R0SCB_SET_FLAG_PRIORITY  0x02
+#pragma pack(push, 8)
 
 // ----- Structures -----
 typedef struct _EXEC_INSTRUCTION_INPUT {
@@ -182,7 +183,7 @@ typedef struct _R0S_HIDDEN_GET_OUTPUT {
 } R0S_HIDDEN_GET_OUTPUT, *PR0S_HIDDEN_GET_OUTPUT;
 
 typedef struct _R0S_HIDDEN_ENTRY_INFO {
-    HANDLE   Pid;
+    UINT64   Pid;
     NTSTATUS ExitStatus;
     ULONG    Reserved;
 } R0S_HIDDEN_ENTRY_INFO, *PR0S_HIDDEN_ENTRY_INFO;
@@ -216,10 +217,10 @@ typedef struct _KERNEL_OPEN_HANDLE_INPUT {
 } KERNEL_OPEN_HANDLE_INPUT, *PKERNEL_OPEN_HANDLE_INPUT;
 
 typedef struct _KERNEL_OPEN_HANDLE_OUTPUT {
-    HANDLE      ResultHandle;
+    UINT64      ResultHandle;
     ACCESS_MASK ActualGrantedAccess;
     NTSTATUS    Status;
-    PVOID       KernelPointer;
+    UINT64      KernelPointer;
     ULONG       Type;
     ULONG       Reserved;
 } KERNEL_OPEN_HANDLE_OUTPUT, *PKERNEL_OPEN_HANDLE_OUTPUT;
@@ -239,16 +240,16 @@ typedef struct _GET_SYSTEM_TOKEN_INPUT {
 
 typedef struct _GET_SYSTEM_TOKEN_OUTPUT {
     NTSTATUS Status;
-    HANDLE   TokenHandle;
+    UINT64   TokenHandle;
 } GET_SYSTEM_TOKEN_OUTPUT, *PGET_SYSTEM_TOKEN_OUTPUT;
 
-typedef struct _SET_INTERNAL_VAR_INPUT {
+typedef struct _SETTINGS_INTERNAL_VAR_INPUT {
     ULONG   Operation;
     ULONG   VariableId;
     UINT64  Value;
     ULONG   NameLength;
     UCHAR   Reserved[4];
-} SET_INTERNAL_VAR_INPUT, *PSET_INTERNAL_VAR_INPUT;
+} SETTINGS_INTERNAL_VAR_INPUT, *PSETTINGS_INTERNAL_VAR_INPUT;
 
 typedef struct _VAR_INFO {
     ULONG   Id;
@@ -292,7 +293,7 @@ typedef struct _R0S_AUTH_LIST_INPUT {
 } R0S_AUTH_LIST_INPUT, *PR0S_AUTH_LIST_INPUT;
 
 typedef struct _R0S_AUTH_ENTRY_INFO {
-    HANDLE   Pid;
+    UINT64   Pid;
     NTSTATUS ExitStatus;
     ULONG    Reserved;
     UINT64   IoctlMask;
@@ -331,7 +332,7 @@ typedef struct _R0S_CREATE_THREAD_INPUT {
 } R0S_CREATE_THREAD_INPUT, *PR0S_CREATE_THREAD_INPUT;
 
 typedef struct _R0S_CREATE_THREAD_OUTPUT {
-    HANDLE   ThreadHandle;
+    UINT64   ThreadHandle;
     NTSTATUS Status;
 } R0S_CREATE_THREAD_OUTPUT, *PR0S_CREATE_THREAD_OUTPUT;
 
@@ -347,13 +348,13 @@ typedef struct _R0S_MSR_OUTPUT {
 } R0S_MSR_OUTPUT, *PR0S_MSR_OUTPUT;
 
 typedef struct _SYNC_KERNEL_APC_INPUT {
-    HANDLE   ThreadId;
+    UINT64   ThreadId;
     UINT64   FunctionAddress;
     ULONG    ArgumentCount;
     ULONG    Reserved;
     UINT64   Arguments[32];
-    HANDLE   CompletionEvent;
-    PVOID    ResultBuffer;
+    UINT64   CompletionEvent;
+    UINT64   ResultBuffer;
 } SYNC_KERNEL_APC_INPUT, *PSYNC_KERNEL_APC_INPUT;
 
 typedef struct _R0SIMULATE_APC_OUTPUT {
@@ -403,9 +404,9 @@ typedef struct _R0S_CB_ADD_INPUT {
     R0S_CB_BASE_INPUT Base;
     ULONG  Priority;
     ULONG  Reserved;
-    HANDLE NotifyEvent;
-    HANDLE SyncEvent;
-    PVOID  SharedBuffer;
+    UINT64 NotifyEvent;
+    UINT64 SyncEvent;
+    UINT64 SharedBuffer;
     ULONG  SharedBufferSize;
     ULONG  Reserved2;
 } R0S_CB_ADD_INPUT, *PR0S_CB_ADD_INPUT;
@@ -424,7 +425,7 @@ typedef struct _R0S_CB_GET_INPUT {
 } R0S_CB_GET_INPUT, *PR0S_CB_GET_INPUT;
 
 typedef struct _R0S_CALLBACK_ENTRY_INFO {
-    HANDLE    ThreadId;
+    UINT64    ThreadId;
     NTSTATUS  ExitStatus;
     ULONG     Priority;
     UINT64    Mask;
@@ -439,6 +440,8 @@ typedef struct _R0S_CALLBACK_CTL_OUTPUT {
     WCHAR  Altitude[32];
     R0S_CALLBACK_ENTRY_INFO Entries[1];
 } R0S_CALLBACK_CTL_OUTPUT, *PR0S_CALLBACK_CTL_OUTPUT;
+
+#pragma pack(pop)
 
 // ----- Exported Functions -----
 R0SIMULATES_API UINT64 R0SimulateISA(
@@ -482,7 +485,7 @@ R0SIMULATES_API BOOL R0SimulateKernelMemoryAccess(
 R0SIMULATES_API HANDLE R0SimulateGetSystemToken(
     BOOL ReplaceToken);
 
-R0SIMULATES_API BOOL R0SimulateSetInternalVariables(
+R0SIMULATES_API BOOL R0SimulateSettingsInternalVariables(
     ULONG  Operation,
     UINT64 VariableId,
     UINT64 Value,

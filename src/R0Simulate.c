@@ -31,7 +31,7 @@ typedef VOID (NTAPI *PKNORMAL_ROUTINE)(PVOID NormalContext,
 #define IOCTL_R0SIMULATE_KERNEL_OPEN_HANDLE         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_NEITHER,  FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_KERNEL_MEMORY_ACCESS       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_NEITHER,  FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_GET_SYSTEM_TOKEN           CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_NEITHER,  FILE_ANY_ACCESS)
-#define IOCTL_R0SIMULATE_SET_INTERNAL_VARS          CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_R0SIMULATE_SETTINGS_INTERNAL_VARS          CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_GET_KERNEL_FUNCTION        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_IO                         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x809, METHOD_NEITHER,  FILE_ANY_ACCESS)
 #define IOCTL_R0SIMULATE_AUTHORIZED_LIST            CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80A, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -48,7 +48,7 @@ typedef VOID (NTAPI *PKNORMAL_ROUTINE)(PVOID NormalContext,
 #define IOCTL_INDEX_KERNEL_OPEN_HANDLE     0x04
 #define IOCTL_INDEX_KERNEL_MEMORY_ACCESS   0x05
 #define IOCTL_INDEX_GET_SYSTEM_TOKEN       0x06
-#define IOCTL_INDEX_SET_INTERNAL_VARS      0x07
+#define IOCTL_INDEX_SETTINGS_INTERNAL_VARS      0x07
 #define IOCTL_INDEX_GET_KERNEL_FUNCTION    0x08
 #define IOCTL_INDEX_IO                     0x09
 #define IOCTL_INDEX_AUTHORIZED_LIST        0x0A
@@ -259,13 +259,13 @@ typedef struct _GET_SYSTEM_TOKEN_OUTPUT {
     HANDLE   TokenHandle;
 } GET_SYSTEM_TOKEN_OUTPUT, *PGET_SYSTEM_TOKEN_OUTPUT;
 
-typedef struct _SET_INTERNAL_VAR_INPUT {
+typedef struct _SETTINGS_INTERNAL_VAR_INPUT {
     ULONG   Operation;
     ULONG   VariableId;
     UINT64  Value;
     ULONG   NameLength;
     UCHAR   Reserved[4];
-} SET_INTERNAL_VAR_INPUT, *PSET_INTERNAL_VAR_INPUT;
+} SETTINGS_INTERNAL_VAR_INPUT, *PSETTINGS_INTERNAL_VAR_INPUT;
 
 typedef struct _VAR_INFO {
     ULONG   Id;
@@ -614,7 +614,7 @@ static UINT64       g_AuthDefaultMask = 0;
 static LIST_ENTRY   g_AuthListHead;
 static KSPIN_LOCK   g_AuthListLock;
 static ULONG g_VersionMajor    = 4;
-static ULONG g_VersionMinor    = 1;
+static ULONG g_VersionMinor    = 2;
 static ULONG g_VersionBuild    = 0;
 static ULONG g_VersionRevision = 0;
 static LIST_ENTRY   g_Win32kSsdtListHead;
@@ -711,7 +711,7 @@ NTSTATUS R0SimulatePreviousModeSwitch(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateKernelOpenHandle(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateKernelMemoryAccess(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateGetSystemToken(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
-NTSTATUS R0SimulateSetInternalVariables(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
+NTSTATUS R0SimulateSettingsInternalVariables(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateGetKernelFunction(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateIO(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
 NTSTATUS R0SimulateAuthorizedListOperations(PVOID, ULONG, PVOID, ULONG, ULONG_PTR*);
@@ -930,7 +930,7 @@ R0S_INTERNAL NTSTATUS R0sRegisterVariable(ULONG Size, PVOID Address, const WCHAR
 
 R0S_INTERNAL PVAR_TABLE_ENTRY FindVarById(ULONG Id)
 {
-    if (!R0sIsIoctlAuthorized(IOCTL_INDEX_SET_INTERNAL_VARS))
+    if (!R0sIsIoctlAuthorized(IOCTL_INDEX_SETTINGS_INTERNAL_VARS))
         return NULL;
 
     PVAR_TABLE_ENTRY found = NULL;
@@ -948,7 +948,7 @@ R0S_INTERNAL PVAR_TABLE_ENTRY FindVarById(ULONG Id)
 
 R0S_INTERNAL PVAR_TABLE_ENTRY FindVarByName(const WCHAR* Name, ULONG NameChars)
 {
-    if (!R0sIsIoctlAuthorized(IOCTL_INDEX_SET_INTERNAL_VARS))
+    if (!R0sIsIoctlAuthorized(IOCTL_INDEX_SETTINGS_INTERNAL_VARS))
         return NULL;
 
     WCHAR             nameBuf[64];
@@ -3877,19 +3877,19 @@ R0S_INTERNAL ULONG R0sMapVisibleIndexToId(ULONG visibleIndex, BOOLEAN isPriv)
     return result;
 }
 
-NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
+NTSTATUS R0SimulateSettingsInternalVariables(PVOID InputBuffer, ULONG InputSize,
                                         PVOID OutputBuffer, ULONG OutputSize, ULONG_PTR *Info)
 {
     NTSTATUS status = STATUS_SUCCESS;
-    PSET_INTERNAL_VAR_INPUT pIn;
+    PSETTINGS_INTERNAL_VAR_INPUT pIn;
     ULONG op;
     BOOLEAN isPriv;
     BOOLEAN seqMode;
 
-    if (!InputBuffer || InputSize < sizeof(SET_INTERNAL_VAR_INPUT))
+    if (!InputBuffer || InputSize < sizeof(SETTINGS_INTERNAL_VAR_INPUT))
         return STATUS_INVALID_PARAMETER;
 
-    pIn = (PSET_INTERNAL_VAR_INPUT)InputBuffer;
+    pIn = (PSETTINGS_INTERNAL_VAR_INPUT)InputBuffer;
     op = pIn->Operation;
     if (op != R0SIMULATE_VAR_OP_GET &&
         op != R0SIMULATE_VAR_OP_SET &&
@@ -3995,7 +3995,7 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
             return STATUS_BUFFER_TOO_SMALL;
 
         if (pIn->NameLength > 0) {
-            if (InputSize < sizeof(SET_INTERNAL_VAR_INPUT) + pIn->NameLength)
+            if (InputSize < sizeof(SETTINGS_INTERNAL_VAR_INPUT) + pIn->NameLength)
                 return STATUS_BUFFER_TOO_SMALL;
             if ((g_SecureMode & 0x20000) && !isPriv)
                 return STATUS_ACCESS_DENIED;
@@ -4004,7 +4004,7 @@ NTSTATUS R0SimulateSetInternalVariables(PVOID InputBuffer, ULONG InputSize,
         KeAcquireSpinLock(&g_VarTableLock, &oldIrql);
         __try {
             if (pIn->NameLength > 0) {
-                PWCHAR pName = (PWCHAR)((PUCHAR)pIn + sizeof(SET_INTERNAL_VAR_INPUT));
+                PWCHAR pName = (PWCHAR)((PUCHAR)pIn + sizeof(SETTINGS_INTERNAL_VAR_INPUT));
                 ULONG  chars = pIn->NameLength / sizeof(WCHAR);
                 if (chars > 0 && pName[chars - 1] == L'\0') chars--;
                 target = FindVarByName(pName, chars);
@@ -5654,7 +5654,7 @@ R0S_INTERNAL const char* R0S_FuncName(ULONG idx)
         case IOCTL_INDEX_KERNEL_OPEN_HANDLE:    return "R0SimulateKernelOpenHandle";
         case IOCTL_INDEX_KERNEL_MEMORY_ACCESS:  return "R0SimulateKernelMemoryAccess";
         case IOCTL_INDEX_GET_SYSTEM_TOKEN:      return "R0SimulateGetSystemToken";
-        case IOCTL_INDEX_SET_INTERNAL_VARS:     return "R0SimulateSetInternalVariables";
+        case IOCTL_INDEX_SETTINGS_INTERNAL_VARS:     return "R0SimulateSettingsInternalVariables";
         case IOCTL_INDEX_GET_KERNEL_FUNCTION:   return "R0SimulateGetKernelFunction";
         case IOCTL_INDEX_IO:                    return "R0SimulateIO";
         case IOCTL_INDEX_AUTHORIZED_LIST:       return "R0SimulateAuthorizedList";
@@ -5780,16 +5780,16 @@ R0S_INTERNAL VOID R0S_LogIn(ULONG code, ULONG idx, PVOID inputBuffer, ULONG inpu
                          time, tid, pid, fn, p->ReplaceToken);
                 break;
             }
-            case IOCTL_INDEX_SET_INTERNAL_VARS: {
-                if (!inputBuffer || inputSize < sizeof(SET_INTERNAL_VAR_INPUT))
+            case IOCTL_INDEX_SETTINGS_INTERNAL_VARS: {
+                if (!inputBuffer || inputSize < sizeof(SETTINGS_INTERNAL_VAR_INPUT))
                     { DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s <bad>\n", time, tid, pid, fn); break; }
-                PSET_INTERNAL_VAR_INPUT p = (PSET_INTERNAL_VAR_INPUT)inputBuffer;
+                PSETTINGS_INTERNAL_VAR_INPUT p = (PSETTINGS_INTERNAL_VAR_INPUT)inputBuffer;
                 WCHAR name[64] = {0};
                 if (p->NameLength > 0 && p->NameLength <= 512 &&
-                    inputSize >= sizeof(SET_INTERNAL_VAR_INPUT) + p->NameLength) {
+                    inputSize >= sizeof(SETTINGS_INTERNAL_VAR_INPUT) + p->NameLength) {
                     ULONG n = p->NameLength / sizeof(WCHAR);
                     if (n >= 64) n = 63;
-                    RtlCopyMemory(name, (PUCHAR)inputBuffer + sizeof(SET_INTERNAL_VAR_INPUT), n * sizeof(WCHAR));
+                    RtlCopyMemory(name, (PUCHAR)inputBuffer + sizeof(SETTINGS_INTERNAL_VAR_INPUT), n * sizeof(WCHAR));
                     name[n] = L'\0';
                 }
                 DbgPrint("R0S IN  time=%I64u tid=%p pid=%p func=%s op=0x%X id=%u value=0x%I64X name=%ws\n",
@@ -5920,7 +5920,7 @@ R0S_INTERNAL VOID R0S_LogOut(ULONG code, ULONG idx, NTSTATUS status, ULONG_PTR i
                 break;
             }
             case IOCTL_INDEX_PROCESS_HIDING:
-            case IOCTL_INDEX_SET_INTERNAL_VARS:
+            case IOCTL_INDEX_SETTINGS_INTERNAL_VARS:
             case IOCTL_INDEX_GET_KERNEL_FUNCTION:
             case IOCTL_INDEX_AUTHORIZED_LIST:
             case IOCTL_INDEX_KERNEL_MEMORY_ACCESS: {
@@ -6210,7 +6210,7 @@ R0S_INTERNAL NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING R
         g_IoctlHandler[IOCTL_INDEX_KERNEL_OPEN_HANDLE]    = (UINT64)(ULONG_PTR)&R0SimulateKernelOpenHandle;
         g_IoctlHandler[IOCTL_INDEX_KERNEL_MEMORY_ACCESS]  = (UINT64)(ULONG_PTR)&R0SimulateKernelMemoryAccess;
         g_IoctlHandler[IOCTL_INDEX_GET_SYSTEM_TOKEN]      = (UINT64)(ULONG_PTR)&R0SimulateGetSystemToken;
-        g_IoctlHandler[IOCTL_INDEX_SET_INTERNAL_VARS]     = (UINT64)(ULONG_PTR)&R0SimulateSetInternalVariables;
+        g_IoctlHandler[IOCTL_INDEX_SETTINGS_INTERNAL_VARS]     = (UINT64)(ULONG_PTR)&R0SimulateSettingsInternalVariables;
         g_IoctlHandler[IOCTL_INDEX_GET_KERNEL_FUNCTION]   = (UINT64)(ULONG_PTR)&R0SimulateGetKernelFunction;
         g_IoctlHandler[IOCTL_INDEX_IO]                    = (UINT64)(ULONG_PTR)&R0SimulateIO;
         g_IoctlHandler[IOCTL_INDEX_AUTHORIZED_LIST]       = (UINT64)(ULONG_PTR)&R0SimulateAuthorizedListOperations;
