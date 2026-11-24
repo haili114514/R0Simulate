@@ -208,7 +208,7 @@ cleanup:
 
 static int cmd_set_auth_mode(ULONG mode)
 {
-    if (!R0SimulateSetInternalVariables(
+    if (!R0SimulateSettingsInternalVariables(
             R0SIMULATE_VAR_OP_SET, AUTH_MODE_VAR_ID, mode,
             NULL, 0, NULL)) {
         PrintWin32Error("set g_AuthMode");
@@ -222,7 +222,7 @@ static int cmd_set_auth_mode(ULONG mode)
 static int cmd_status(void)
 {
     UINT64 value = 0;
-    if (!R0SimulateSetInternalVariables(
+    if (!R0SimulateSettingsInternalVariables(
             R0SIMULATE_VAR_OP_GET, AUTH_MODE_VAR_ID, 0,
             &value, sizeof(value), NULL)) {
         PrintWin32Error("get g_AuthMode");
